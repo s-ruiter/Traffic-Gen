@@ -9,16 +9,41 @@
   "platform": "proxmox",
   "status": "beta",
   "icon": "activity",
-  "products": ["FortiGate", "FortiOS"],
-  "tags": ["traffic-generator", "sd-wan", "application-control", "web-filter", "antivirus", "ioc", "lxc"],
-  "author": { "name": "Sander Ruiter", "email": "sander@ruiter.nu" },
+  "products": [
+    "FortiGate",
+    "FortiOS"
+  ],
+  "tags": [
+    "traffic-generator",
+    "sd-wan",
+    "application-control",
+    "web-filter",
+    "antivirus",
+    "ioc",
+    "lxc"
+  ],
+  "author": {
+    "name": "Sander Ruiter"
+  },
   "updated": "2026-11-04",
   "repository": "http://10.10.100.3:8010/sander/Traffic-Gen",
   "requirements": [
-    { "label": "Proxmox VE", "value": "7.x or 8.x" },
-    { "label": "Container", "value": "Debian 12 unprivileged LXC, 2 vCPU, 1 GB RAM, 4 GB disk by default (created by the installer)" },
-    { "label": "Network", "value": "Two NICs: eth0 for management, eth1 for test traffic (VLAN-aware bridge for multiple VLANs)" },
-    { "label": "Internet", "value": "Outbound access through the FortiGate under test" }
+    {
+      "label": "Proxmox VE",
+      "value": "7.x or 8.x"
+    },
+    {
+      "label": "Container",
+      "value": "Debian 12 unprivileged LXC, 2 vCPU, 1 GB RAM, 4 GB disk by default (created by the installer)"
+    },
+    {
+      "label": "Network",
+      "value": "Two NICs: eth0 for management, eth1 for test traffic (VLAN-aware bridge for multiple VLANs)"
+    },
+    {
+      "label": "Internet",
+      "value": "Outbound access through the FortiGate under test"
+    }
   ],
   "install": [
     {
@@ -41,9 +66,21 @@
     "Compare the dashboard and /var/log/trafficgen/requests.log with the FortiGate logs for application control, web filter, antivirus and botnet events."
   ],
   "screenshots": [
-    { "file": "01-dashboard.png", "caption": "Dashboard with live throughput, per-application and per-source results, and the malware detection rate." },
-    { "file": "02-traffic-mix.png", "caption": "Traffic mix: weight per group and per-app switches." },
-    { "file": "03-network.png", "caption": "Network: multiple source networks with VLANs, source IP ranges and FortiGate gateways." },
-    { "file": "04-settings.png", "caption": "Settings: TLS verification, IOC options and password." }
+    {
+      "file": "01-dashboard.png",
+      "caption": "Dashboard with live throughput, per-application and per-source results, and the malware detection rate."
+    },
+    {
+      "file": "02-traffic-mix.png",
+      "caption": "Traffic mix: weight per group and per-app switches."
+    },
+    {
+      "file": "03-network.png",
+      "caption": "Network: multiple source networks with VLANs, source IP ranges and FortiGate gateways."
+    },
+    {
+      "file": "04-settings.png",
+      "caption": "Settings: TLS verification, IOC options and password."
+    }
   ]
 }
