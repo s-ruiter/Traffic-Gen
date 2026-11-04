@@ -1,6 +1,6 @@
 # Traffic-Gen
 
-Proxmox LXC die realistisch gebruikersverkeer genereert (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) vanaf **meerdere bron-IP's**, om een FortiGate (SD-WAN, Application Control, Web Filter) te monitoren.
+Proxmox LXC met een web-GUI die realistisch gebruikersverkeer genereert (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) vanaf **meerdere bron-IP's en VLANs**, om een FortiGate (SD-WAN, Application Control, Web Filter) te monitoren.
 
 ## Uitrollen (op de Proxmox host, als root)
 
@@ -9,30 +9,36 @@ git clone http://10.10.100.3:8010/sander/Traffic-Gen.git
 cd Traffic-Gen && bash install.sh
 ```
 
-De wizard vraagt CTID, hostname, bridge/VLAN, IP + gateway + DNS, aantal extra bron-IP's, standaard looptijd, intensiteit, storage en resources. Daarna maakt hij een Debian 12 LXC en installeert de generator.
+De wizard maakt een Debian 12 LXC met **twee NIC's**:
 
-## Gebruik (in de LXC: `pct enter <CTID>`)
+| NIC  | Doel | Instelling |
+|------|------|------------|
+| eth0 | Management (web-GUI) | bridge, VLAN, IP/gateway/DNS via de wizard |
+| eth1 | Testverkeer | bridge (optioneel tag); **geen IP**, de rest regel je in de GUI |
 
-```bash
-trafficgen start                 # op de achtergrond, standaard looptijd uit config
-trafficgen start -d 30           # 30 minuten (0 = tot 'stop')
-trafficgen start -g streaming,collab -i high -t 4
-trafficgen status                # toestand + laatste logregels
-trafficgen stop
-trafficgen run -d 5              # voorgrond, toont samenvatting per app
-trafficgen apps                  # groepen, gewichten en apps
-trafficgen wizard                # configuratie interactief aanpassen
-```
+Aan het eind krijg je de GUI-URL (`https://<mgmt-ip>:8443`, zelfondertekend certificaat) en het admin-wachtwoord (zelf kiezen of laten genereren).
 
-## Hoe het werkt
+## In de GUI
 
-- Extra bron-IP's (`source.first` + `source.count`) worden als alias op `eth0` gezet tijdens een run en daarna weer verwijderd (`keep_ips: true` om te houden). Elk IP draait `threads_per_ip` "gebruikers" met eigen User-Agent; DNS, TCP/TLS en UDP gebruiken dat bron-IP.
-- Verkeer gebruikt echte hostnamen over TLS (SNI), waarop Application Control herkent. Teams en Meet sturen ook STUN/UDP-media (3478 / 19302).
-- Groepen en gewichten staan in `/etc/trafficgen/config.yaml`; apps in `/opt/trafficgen/profiles.yaml` (kopieer naar `/etc/trafficgen/profiles.yaml` om eigen lijst te gebruiken).
-- `webfilter` (gokken, proxy, p2p, games) en `security` (EICAR) staan standaard uit: zet het gewicht > 0. Geblokkeerde requests (FortiGate blokpagina/403) tellen als `blocked`.
-- Logs: `/var/log/trafficgen/requests.log` (JSON per request, handig om met FortiGate-logs te vergelijken) en `last-run.json`.
+- **Dashboard**: looptijd (5 min tot 2 uur, tot stop, of eigen waarde), intensiteit, sessies per IP, start/stop, live doorvoer, requests, geblokkeerd/fouten, per applicatie en per bron-IP, laatste requests.
+- **Verkeersmix**: gewicht per groep (Microsoft 365, Samenwerken, Streaming, Social, SaaS, Web, Updates, Downloads, SD-WAN probes, Webfilter-test, EICAR) en per app aan/uit.
+- **Netwerk**: per bronnetwerk de interface (eth1), optioneel VLAN, eerste IP, prefix, aantal IP's, gateway en DNS. *Toepassen* maakt de VLAN-subinterface, voegt de IP's toe en zet source-based routing op, zodat testverkeer via de eigen gateway (de FortiGate) gaat en management gescheiden blijft. *Verbinding testen* pingt de gateway en test DNS vanaf het bronnetwerk.
+- **Instellingen**: wachtwoord wijzigen en TLS-certificaten van doelsites controleren (standaard uit, voor SSL deep inspection).
+
+## Proxmox-notities
+
+- Gebruik je VLANs in de GUI, laat dan de eth1-tag in de wizard leeg en zorg dat de bridge VLAN-aware is en de gewenste VLANs doorlaat. Voor één vlak netwerk kun je een tag op eth1 zetten.
+- Netwerkwijzigingen worden toegepast bij *Toepassen* en bij het opstarten van de service. Tijdens een lopende test is toepassen geblokkeerd.
+
+## Logs en CLI
+
+- `/var/log/trafficgen/requests.log`: JSON per request, om met FortiGate-logs te vergelijken.
+- `trafficgen run -d 5` voert een test in de voorgrond uit met de ingestelde netwerken; `trafficgen apps` toont de profielen; `trafficgen passwd` reset het GUI-wachtwoord.
+- Eigen app-lijst: kopieer `/opt/trafficgen/profiles.yaml` naar `/etc/trafficgen/profiles.yaml`.
+- Service: `systemctl status trafficgen-web`, logs met `journalctl -u trafficgen-web`.
 
 ## Let op
 
-- Zet de FortiGate-policy zo dat alle bron-IP's (of het hele subnet) door de gewenste policy lopen; bij SSL deep inspection staat `tls_verify: false` correct.
-- Gebruik alleen op netwerken waar je dit mag doen. De lijst met webfilter-testsites is aanpasbaar.
+- Zorg dat de FortiGate-policy de bronnetwerken doorlaat naar internet.
+- Webfilter-testsites en EICAR staan standaard op gewicht 0.
+- Gebruik alleen op netwerken waar je dit mag doen.

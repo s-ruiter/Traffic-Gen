@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Web GUI + JSON API for trafficgen (stdlib only, HTTPS with self-signed cert)."""
+import collections
+import hashlib
+import hmac
+import http.cookies
+import json
+import os
+import secrets
+import ssl
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+import yaml
+
+import netconf
+import trafficgen as tg
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+WEBDIR = os.path.join(BASE, "web")
+AUTH_FILE = os.environ.get("TRAFFICGEN_AUTH", "/etc/trafficgen/auth.json")
+CERT = "/etc/trafficgen/tls/server.crt"
+KEY = "/etc/trafficgen/tls/server.key"
+SESSION_TTL = 12 * 3600
+VERSION = "2.0"
+
+
+# ----------------------------------------------------------------- auth
+def _hash(pw, salt, it=200000):
+    return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, it).hex()
+
+
+def set_password(pw):
+    if len(pw) < 8:
+        raise ValueError("Wachtwoord moet minimaal 8 tekens zijn.")
+    salt = secrets.token_bytes(16)
+    os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
+    fd = os.open(AUTH_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"salt": salt.hex(), "hash": _hash(pw, salt)}, f)
+
+
+def check_password(pw):
+    try:
+        a = json.load(open(AUTH_FILE))
+    except (OSError, ValueError):
+        return False
+    return hmac.compare_digest(_hash(pw, bytes.fromhex(a["salt"])), a["hash"])
+
+
+class Sessions:
+    def __init__(self):
+        self.s, self.fail, self.lock = {}, collections.defaultdict(list), threading.Lock()
+
+    def new(self):
+        t = secrets.token_urlsafe(32)
+        with self.lock:
+            self.s[t] = time.time() + SESSION_TTL
+        return t
+
+    def valid(self, t):
+        with self.lock:
+            e = self.s.get(t)
+            if e and e > time.time():
+                return True
+            self.s.pop(t, None)
+            return False
+
+    def drop(self, t):
+        with self.lock:
+            self.s.pop(t, None)
+
+    def locked(self, ip):
+        now = time.time()
+        with self.lock:
+            self.fail[ip] = [x for x in self.fail[ip] if x > now - 300]
+            return len(self.fail[ip]) >= 5
+
+    def failed(self, ip):
+        with self.lock:
+            self.fail[ip].append(time.time())
+
+
+SESS = Sessions()
+
+
+# ------------------------------------------------------------ controller
+def save_config(cfg):
+    os.makedirs(os.path.dirname(tg.CONFIG_PATH), exist_ok=True)
+    tmp = tg.CONFIG_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+    os.replace(tmp, tg.CONFIG_PATH)
+
+
+class Controller:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.engine = None
+        self.stop_evt = None
+        self.thread = None
+        self.deadline = None
+        self.series = collections.deque(maxlen=300)
+        self.apply_log = []
+        threading.Thread(target=self._sampler, daemon=True).start()
+
+    @property
+    def running(self):
+        return bool(self.thread and self.thread.is_alive())
+
+    def _sampler(self):
+        while True:
+            time.sleep(2)
+            e = self.engine
+            if e and self.running:
+                t = e.totals()
+                self.series.append([round(time.time(), 1), t.get("requests", 0), t.get("bytes", 0),
+                                    t.get("blocked", 0), t.get("error", 0)])
+
+    def apply_network(self):
+        cfg = tg.load_config()
+        if not cfg["networks"]:
+            netconf.teardown()
+            self.apply_log = ["Geen netwerken geconfigureerd."]
+            return
+        try:
+            self.apply_log, _ = netconf.apply(cfg["networks"], cfg["mgmt_interface"])
+        except ValueError as e:
+            self.apply_log = [str(e)]
+
+    def start(self, p):
+        with self.lock:
+            if self.running:
+                raise ValueError("Er draait al een test.")
+            cfg = tg.load_config()
+            for k in ("duration_minutes", "threads_per_ip"):
+                if k in p:
+                    cfg[k] = max(0, int(p[k]))
+            if p.get("intensity") in tg.THINK:
+                cfg["intensity"] = p["intensity"]
+            if isinstance(p.get("groups"), dict):
+                cfg["groups"] = {g: max(0, int(w)) for g, w in p["groups"].items()}
+            cfg["threads_per_ip"] = min(max(cfg["threads_per_ip"], 1), 20)
+            sources = netconf.sources(cfg)
+            if not sources:
+                raise ValueError("Er zijn geen bronnetwerken ingesteld. Ga naar 'Netwerk'.")
+            live = netconf.live_addrs()
+            missing = [s["ip"] for s in sources if s["ip"] not in live.get(s["dev"], set())]
+            if missing:
+                raise ValueError("%d bron-IP's staan niet actief. Klik eerst op 'Toepassen' bij Netwerk." % len(missing))
+            self.stop_evt = threading.Event()
+            self.engine = tg.Engine(cfg, tg.load_profiles(), self.stop_evt, sources)
+            dur = cfg["duration_minutes"]
+            self.deadline = time.time() + dur * 60 if dur else None
+            self.series.clear()
+            self.thread = threading.Thread(target=self.engine.run, args=(self.deadline,), daemon=True)
+            self.thread.start()
+            self.cfg_run = cfg
+
+    def stop(self):
+        with self.lock:
+            if self.stop_evt:
+                self.stop_evt.set()
+
+    def state(self):
+        e = self.engine
+        s = {"running": self.running, "version": VERSION, "now": time.time(), "has_run": bool(e)}
+        if e:
+            s.update({
+                "started": e.started, "finished": e.finished, "deadline": self.deadline,
+                "sources": len(e.sources), "threads_per_ip": e.cfg["threads_per_ip"], "intensity": e.cfg["intensity"],
+                "totals": e.totals(), "apps": e.stats.snapshot(), "src": e.src_stats.snapshot(),
+                "series": list(self.series),
+            })
+        return s
+
+
+CTRL = Controller()
+
+
+# ----------------------------------------------------------- HTTP layer
+def config_view(cfg):
+    return {k: cfg[k] for k in ("duration_minutes", "threads_per_ip", "intensity", "tls_verify", "groups",
+                                "disabled_apps", "networks", "mgmt_interface")}
+
+
+class H(BaseHTTPRequestHandler):
+    server_version = "trafficgen"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    # helpers
+    def _send(self, code, body, ctype="application/json", extra=None):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _token(self):
+        c = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        return c["tg"].value if "tg" in c else ""
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 1_000_000:
+            raise ValueError("Request te groot")
+        return json.loads(self.rfile.read(n) or b"{}")
+
+    def _authed(self):
+        return SESS.valid(self._token())
+
+    # routes
+    def do_GET(self):
+        u = urlparse(self.path)
+        if u.path in ("/", "/index.html"):
+            return self._send(200, open(os.path.join(WEBDIR, "index.html"), "rb").read(), "text/html; charset=utf-8")
+        if not u.path.startswith("/api/"):
+            return self._send(404, {"error": "not found"})
+        if u.path == "/api/session":
+            return self._send(200, {"authed": self._authed()})
+        if not self._authed():
+            return self._send(401, {"error": "login vereist"})
+        try:
+            cfg = tg.load_config()
+            if u.path == "/api/state":
+                return self._send(200, CTRL.state())
+            if u.path == "/api/config":
+                return self._send(200, config_view(cfg))
+            if u.path == "/api/apps":
+                groups = collections.defaultdict(list)
+                for n, a in tg.load_profiles().items():
+                    groups[a["group"]].append({"name": n, "weight": a.get("weight", 1),
+                                               "targets": len(a.get("urls", [])) + len(a.get("stun", [])) + len(a.get("ping", []))})
+                return self._send(200, groups)
+            if u.path == "/api/interfaces":
+                return self._send(200, {"interfaces": netconf.interfaces(), "mgmt": cfg["mgmt_interface"],
+                                        "mgmt_net": str(netconf.mgmt_network(cfg["mgmt_interface"]) or "")})
+            if u.path == "/api/network":
+                return self._send(200, {"status": netconf.status(cfg), "log": CTRL.apply_log})
+            if u.path == "/api/log":
+                e = CTRL.engine
+                n = int(parse_qs(u.query).get("n", ["60"])[0])
+                return self._send(200, list(e.recent)[-n:][::-1] if e else [])
+        except Exception as e:  # noqa
+            return self._send(500, {"error": str(e)})
+        self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        if self.headers.get("X-TG") != "1":
+            return self._send(403, {"error": "forbidden"})
+        ip = self.client_address[0]
+        try:
+            body = self._body()
+            if u.path == "/api/login":
+                if SESS.locked(ip):
+                    return self._send(429, {"error": "Te veel pogingen, probeer het over 5 minuten opnieuw."})
+                if check_password(str(body.get("password", ""))):
+                    t = SESS.new()
+                    return self._send(200, {"ok": True}, extra={"Set-Cookie": "tg=%s; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=%d" % (t, SESSION_TTL)})
+                SESS.failed(ip)
+                time.sleep(1)
+                return self._send(401, {"error": "Onjuist wachtwoord."})
+            if not self._authed():
+                return self._send(401, {"error": "login vereist"})
+            if u.path == "/api/logout":
+                SESS.drop(self._token())
+                return self._send(200, {"ok": True}, extra={"Set-Cookie": "tg=; Path=/; Max-Age=0"})
+            if u.path == "/api/start":
+                CTRL.start(body)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/stop":
+                CTRL.stop()
+                return self._send(200, {"ok": True})
+            if u.path == "/api/config":
+                cfg = tg.load_config()
+                if "duration_minutes" in body:
+                    cfg["duration_minutes"] = max(0, int(body["duration_minutes"]))
+                if "threads_per_ip" in body:
+                    cfg["threads_per_ip"] = min(max(int(body["threads_per_ip"]), 1), 20)
+                if body.get("intensity") in tg.THINK:
+                    cfg["intensity"] = body["intensity"]
+                if isinstance(body.get("groups"), dict):
+                    cfg["groups"] = {g: max(0, min(100, int(w))) for g, w in body["groups"].items()}
+                if isinstance(body.get("disabled_apps"), list):
+                    cfg["disabled_apps"] = [str(x) for x in body["disabled_apps"]]
+                if "tls_verify" in body:
+                    cfg["tls_verify"] = bool(body["tls_verify"])
+                save_config(cfg)
+                return self._send(200, config_view(cfg))
+            if u.path == "/api/network/apply":
+                if CTRL.running:
+                    return self._send(409, {"error": "Stop eerst de lopende test."})
+                nets, errs = netconf.validate(body.get("networks", []), tg.load_config()["mgmt_interface"])
+                if errs:
+                    return self._send(400, {"error": "\n".join(errs)})
+                cfg = tg.load_config()
+                cfg["networks"] = nets
+                save_config(cfg)
+                CTRL.apply_network()
+                return self._send(200, {"log": CTRL.apply_log, "status": netconf.status(cfg), "networks": nets})
+            if u.path == "/api/network/test":
+                return self._send(200, netconf.test(tg.load_config()))
+            if u.path == "/api/password":
+                if not check_password(str(body.get("current", ""))):
+                    return self._send(400, {"error": "Huidig wachtwoord klopt niet."})
+                set_password(str(body.get("new", "")))
+                return self._send(200, {"ok": True})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except Exception as e:  # noqa
+            return self._send(500, {"error": str(e)})
+        self._send(404, {"error": "not found"})
+
+
+def main():
+    cfg = tg.load_config()
+    port = int(os.environ.get("TRAFFICGEN_PORT", "8443"))
+    if not os.path.exists(AUTH_FILE):
+        pw = secrets.token_urlsafe(9)
+        set_password(pw)
+        print("No admin password set; generated one: %s" % pw, flush=True)
+    if cfg["networks"]:
+        CTRL.apply_network()
+        print("network: " + " | ".join(CTRL.apply_log), flush=True)
+    srv = ThreadingHTTPServer(("0.0.0.0", port), H)
+    srv.daemon_threads = True
+    if os.path.exists(CERT) and os.path.exists(KEY):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(CERT, KEY)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        print("Listening on https://0.0.0.0:%d" % port, flush=True)
+    else:
+        print("WARNING: no TLS cert found, serving plain HTTP on :%d (login cookie is Secure and will not work)" % port, flush=True)
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

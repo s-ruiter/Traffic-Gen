@@ -2,7 +2,7 @@
 """trafficgen - realistic multi-source-IP traffic generator for FortiGate
 (SD-WAN / application control / web filtering) monitoring.
 
-Subcommands: run | start | stop | status | apps | wizard
+Engine + CLI. The web GUI (webui.py) is the normal way to run tests.
 """
 import argparse
 import collections
@@ -40,18 +40,13 @@ USER_AGENTS = [
 THINK = {"low": (5, 20), "medium": (1, 8), "high": (0.2, 2)}
 
 DEFAULT_CONFIG = {
-    "source": {
-        "interface": "eth0",
-        "include_primary": True,   # primary IP of the interface is also a source
-        "first": "",               # first extra source IP ("" = none)
-        "count": 0,                # number of extra source IPs (first .. first+count-1)
-        "keep_ips": False,         # keep alias IPs after the run
-    },
+    "mgmt_interface": "eth0",      # never used for test traffic
+    "networks": [],                # source networks, managed in the GUI (see netconf.py)
     "duration_minutes": 10,        # 0 = run until stopped
     "threads_per_ip": 2,           # parallel 'sessions' per source IP
     "intensity": "medium",         # low | medium | high
     "tls_verify": False,           # False = work behind SSL deep inspection
-    "dns_server": "",              # "" = first nameserver of /etc/resolv.conf
+    "disabled_apps": [],
     "groups": {                    # relative weights of traffic groups; 0 = off
         "office365": 25, "collab": 20, "streaming": 20, "social": 10,
         "saas": 10, "web": 10, "updates": 3, "download": 2, "sdwan": 5,
@@ -238,40 +233,41 @@ class Stats:
             for k, v in kw.items():
                 self.c[key][k] += v
 
+    def snapshot(self):
+        with self.lock:
+            return {k: dict(v) for k, v in self.c.items()}
+
 
 class Engine:
-    def __init__(self, cfg, apps, stop_evt):
-        self.cfg, self.apps, self.stop = cfg, apps, stop_evt
+    """sources: list of {"ip":..., "dns":...}"""
+
+    def __init__(self, cfg, apps, stop_evt, sources):
+        self.cfg, self.stop, self.sources = cfg, stop_evt, sources
+        disabled = set(cfg.get("disabled_apps") or [])
+        self.apps = {n: a for n, a in apps.items() if n not in disabled}
         self.stats = Stats()
-        self.dns = cfg["dns_server"] or self._resolv()
+        self.src_stats = Stats()
+        self.recent = collections.deque(maxlen=300)
         self.ctx = ssl.create_default_context()
         if not cfg["tls_verify"]:
             self.ctx.check_hostname = False
             self.ctx.verify_mode = ssl.CERT_NONE
         self.reqlog = None
         self.loglock = threading.Lock()
-        # weighted group -> apps
         self.groups = collections.defaultdict(list)
-        for name, a in apps.items():
+        for name, a in self.apps.items():
             self.groups[a["group"]].append((name, a))
         self.active = [(g, w) for g, w in cfg["groups"].items() if w > 0 and g in self.groups]
         if not self.active:
-            sys.exit("No traffic group enabled (check 'groups' in config).")
-
-    @staticmethod
-    def _resolv():
-        try:
-            for ln in open("/etc/resolv.conf"):
-                if ln.startswith("nameserver"):
-                    return ln.split()[1]
-        except OSError:
-            pass
-        return "1.1.1.1"
+            raise ValueError("Geen verkeersgroep ingeschakeld.")
+        self.started = time.time()
+        self.finished = None
 
     def write(self, **rec):
-        rec["ts"] = datetime.now().isoformat(timespec="seconds")
-        if self.reqlog:
-            with self.loglock:
+        rec["ts"] = datetime.now().strftime("%H:%M:%S")
+        with self.loglock:
+            self.recent.append(rec)
+            if self.reqlog:
                 self.reqlog.write(json.dumps(rec) + "\n")
 
     def pick_app(self):
@@ -279,11 +275,13 @@ class Engine:
         apps = self.groups[g]
         return random.choices(apps, [a.get("weight", 1) for _, a in apps])[0]
 
+    def account(self, src, name, **kw):
+        self.stats.add(name, **kw)
+        self.src_stats.add(src["ip"], **kw)
+
     def visit(self, src, name, app, cache, ua):
-        targets = []
-        for kind in ("urls", "stun", "ping"):
-            for t in app.get(kind, []):
-                targets.append((kind, t))
+        ip_src = src["ip"]
+        targets = [(k, t) for k in ("urls", "stun", "ping") for t in app.get(k, [])]
         for kind, t in random.sample(targets, min(len(targets), random.randint(1, 3))):
             if self.stop.is_set():
                 return
@@ -293,25 +291,25 @@ class Engine:
                     host = t.split("://", 1)[1].split("/")[0].split(":")[0]
                     ips = cache.get(host)
                     if not ips or ips[1] < time.time():
-                        ips = (dns_resolve(host, self.dns, src), time.time() + 60)
+                        ips = (dns_resolve(host, src["dns"], ip_src), time.time() + 60)
                         cache[host] = ips
-                    st, n, blocked = http_get(t, random.choice(ips[0]), src, ua,
+                    st, n, blocked = http_get(t, random.choice(ips[0]), ip_src, ua,
                                               app.get("max_bytes", 400000), self.ctx)
                     res = "blocked" if blocked else "ok"
-                    self.stats.add(name, requests=1, bytes=n, **{res: 1})
-                    self.write(src=src, app=name, url=t, result=res, status=st, bytes=n,
+                    self.account(src, name, requests=1, bytes=n, **{res: 1})
+                    self.write(src=ip_src, app=name, url=t, result=res, status=st, bytes=n,
                                ms=int((time.time() - t0) * 1000))
                 elif kind == "stun":
-                    ok, n = stun_probe(t, src, app.get("udp_burst_s", 0))
-                    self.stats.add(name, requests=1, bytes=n, ok=int(ok), error=int(not ok))
-                    self.write(src=src, app=name, url="udp://" + t, result="ok" if ok else "noreply", bytes=n)
+                    ok, n = stun_probe(t, ip_src, app.get("udp_burst_s", 0))
+                    self.account(src, name, requests=1, bytes=n, ok=int(ok), error=int(not ok))
+                    self.write(src=ip_src, app=name, url="udp://" + t, result="ok" if ok else "noreply", bytes=n)
                 else:
-                    ok = ping_probe(t, src)
-                    self.stats.add(name, requests=1, ok=int(ok), error=int(not ok))
-                    self.write(src=src, app=name, url="icmp://" + t, result="ok" if ok else "loss")
+                    ok = ping_probe(t, ip_src)
+                    self.account(src, name, requests=1, ok=int(ok), error=int(not ok))
+                    self.write(src=ip_src, app=name, url="icmp://" + t, result="ok" if ok else "loss")
             except (OSError, ssl.SSLError, http.client.HTTPException) as e:
-                self.stats.add(name, requests=1, error=1)
-                self.write(src=src, app=name, url=t, result="error", err=type(e).__name__ + ":" + str(e)[:80])
+                self.account(src, name, requests=1, error=1)
+                self.write(src=ip_src, app=name, url=t, result="error", err=type(e).__name__ + ": " + str(e)[:80])
 
     def user(self, src):
         ua = random.choice(USER_AGENTS)
@@ -322,59 +320,50 @@ class Engine:
             self.visit(src, name, app, cache, ua)
             self.stop.wait(random.uniform(lo, hi))
 
-    def run(self, ips, deadline):
+    def run(self, deadline):
+        """Blocks until stop is set or the deadline passes."""
         os.makedirs(LOG_DIR, exist_ok=True)
         try:
             self.reqlog = open(os.path.join(LOG_DIR, "requests.log"), "a", buffering=1)
         except OSError:
             self.reqlog = None
         threads = []
-        for ip in ips:
+        for src in self.sources:
             for _ in range(self.cfg["threads_per_ip"]):
-                t = threading.Thread(target=self.user, args=(ip,), daemon=True)
+                t = threading.Thread(target=self.user, args=(src,), daemon=True)
                 t.start()
                 threads.append(t)
-                time.sleep(random.uniform(0, 0.3))
-        last = time.time()
+                time.sleep(random.uniform(0, 0.1))
         while not self.stop.is_set() and (deadline is None or time.time() < deadline):
-            self.stop.wait(1)
-            if time.time() - last >= 30:
-                last = time.time()
-                tot = sum(c["requests"] for c in self.stats.c.values())
-                left = "" if deadline is None else " | %ds left" % max(0, deadline - time.time())
-                log("running: %d requests so far%s" % (tot, left))
+            self.stop.wait(0.5)
         self.stop.set()
         for t in threads:
             t.join(timeout=12)
+        self.finished = time.time()
         if self.reqlog:
             self.reqlog.close()
 
-    def summary(self):
-        rows = sorted(self.stats.c.items(), key=lambda kv: -kv[1]["requests"])
-        out = ["%-18s %8s %8s %8s %8s %10s" % ("app", "requests", "ok", "blocked", "error", "MB")]
+    def totals(self):
         tot = collections.Counter()
-        for n, c in rows:
-            out.append("%-18s %8d %8d %8d %8d %10.1f" % (n, c["requests"], c["ok"], c["blocked"], c["error"], c["bytes"] / 1e6))
+        for c in self.stats.snapshot().values():
             tot.update(c)
-        out.append("%-18s %8d %8d %8d %8d %10.1f" % ("TOTAL", tot["requests"], tot["ok"], tot["blocked"], tot["error"], tot["bytes"] / 1e6))
-        return "\n".join(out), {n: dict(c) for n, c in rows}
+        return dict(tot)
+
+    def summary(self):
+        snap = self.stats.snapshot()
+        rows = sorted(snap.items(), key=lambda kv: -kv[1].get("requests", 0))
+        g = lambda c, k: c.get(k, 0)
+        out = ["%-18s %8s %8s %8s %8s %10s" % ("app", "requests", "ok", "blocked", "error", "MB")]
+        for n, c in rows:
+            out.append("%-18s %8d %8d %8d %8d %10.1f" % (n, g(c, "requests"), g(c, "ok"), g(c, "blocked"), g(c, "error"), g(c, "bytes") / 1e6))
+        t = self.totals()
+        out.append("%-18s %8d %8d %8d %8d %10.1f" % ("TOTAL", g(t, "requests"), g(t, "ok"), g(t, "blocked"), g(t, "error"), g(t, "bytes") / 1e6))
+        return "\n".join(out)
 
 
-# ------------------------------------------------------------------- cmds
-def source_ips(cfg):
-    iface = cfg["source"]["interface"]
-    primary, prefix = iface_info(iface)
-    ips, extra = [], []
-    if cfg["source"]["include_primary"]:
-        ips.append(primary)
-    if cfg["source"]["first"] and cfg["source"]["count"] > 0:
-        first = ipaddress.IPv4Address(cfg["source"]["first"])
-        extra = [str(first + i) for i in range(cfg["source"]["count"])]
-        extra = [e for e in extra if e != primary]
-    return ips + extra, extra, prefix
-
-
+# ------------------------------------------------------------------- CLI
 def cmd_run(args):
+    import netconf
     cfg = load_config(args.config)
     if args.duration is not None:
         cfg["duration_minutes"] = args.duration
@@ -385,66 +374,18 @@ def cmd_run(args):
     if args.groups:
         wanted = set(args.groups.split(","))
         cfg["groups"] = {g: (max(w, 1) if g in wanted else 0) for g, w in cfg["groups"].items()}
-    apps = load_profiles()
-    ips, extra, prefix = source_ips(cfg)
-    iface = cfg["source"]["interface"]
-    added = []
-    for ip in extra:
-        r = sh(["ip", "addr", "add", "%s/%d" % (ip, prefix), "dev", iface])
-        if r.returncode == 0:
-            added.append(ip)
-            sh(["arping", "-q", "-c", "1", "-U", "-I", iface, ip])   # announce to switch/FortiGate
-        elif "exists" not in r.stderr.lower():
-            log("WARN cannot add %s: %s" % (ip, r.stderr.strip()))
+    sources = netconf.sources(cfg)
+    if not sources:
+        sys.exit("No source networks configured. Configure them in the web GUI first.")
     stop = threading.Event()
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, lambda *_: stop.set())
-    eng = Engine(cfg, apps, stop)
+    eng = Engine(cfg, load_profiles(), stop, sources)
     dur = cfg["duration_minutes"]
-    deadline = time.time() + dur * 60 if dur else None
-    log("start: %d source IPs x %d sessions, intensity=%s, duration=%s, groups=%s" % (
-        len(ips), cfg["threads_per_ip"], cfg["intensity"],
-        ("%d min" % dur) if dur else "until stopped", ",".join(g for g, _ in eng.active)))
-    log("source IPs: " + ", ".join(ips))
-    try:
-        eng.run(ips, deadline)
-    finally:
-        if not cfg["source"]["keep_ips"]:
-            for ip in added:
-                sh(["ip", "addr", "del", "%s/%d" % (ip, prefix), "dev", iface])
-    text, data = eng.summary()
-    print("\n" + text)
-    os.makedirs(LOG_DIR, exist_ok=True)
-    with open(os.path.join(LOG_DIR, "last-run.json"), "w") as f:
-        json.dump({"finished": datetime.now().isoformat(timespec="seconds"), "sources": ips, "apps": data}, f, indent=1)
-
-
-def cmd_start(args):
-    if sh(["systemctl", "is-active", "--quiet", UNIT]).returncode == 0:
-        sys.exit("Already running. Use 'trafficgen stop' first.")
-    sh(["systemctl", "reset-failed", UNIT])
-    cmd = ["systemd-run", "--unit", UNIT, "--collect", "-p", "KillSignal=SIGTERM", "-p", "TimeoutStopSec=30",
-           "-p", "StandardOutput=append:%s/run.log" % LOG_DIR, "-p", "StandardError=inherit",
-           sys.executable, os.path.abspath(__file__), "run"]
-    for flag, val in (("-d", args.duration), ("-i", args.intensity), ("-t", args.threads), ("-g", args.groups)):
-        if val is not None:
-            cmd += [flag, str(val)]
-    os.makedirs(LOG_DIR, exist_ok=True)
-    r = sh(cmd)
-    print(r.stderr.strip() or "Started in background. Follow with: trafficgen status  (log: %s/run.log)" % LOG_DIR)
-
-
-def cmd_stop(_):
-    sh(["systemctl", "stop", UNIT])
-    print("Stopped.")
-
-
-def cmd_status(_):
-    active = sh(["systemctl", "is-active", UNIT]).stdout.strip()
-    print("State:", active)
-    p = os.path.join(LOG_DIR, "run.log")
-    if os.path.exists(p):
-        print("".join(open(p).readlines()[-15:]))
+    log("start: %d source IPs x %d sessions, %s" % (len(sources), cfg["threads_per_ip"],
+                                                  ("%d min" % dur) if dur else "until Ctrl-C"))
+    eng.run(time.time() + dur * 60 if dur else None)
+    print("\n" + eng.summary())
 
 
 def cmd_apps(_):
@@ -456,45 +397,27 @@ def cmd_apps(_):
         print("%-10s weight=%-3s %s" % (g, cfg["groups"].get(g, "-"), ", ".join(sorted(names))))
 
 
-def ask(q, default):
-    v = input("%s [%s]: " % (q, default)).strip()
-    return v if v else str(default)
-
-
-def cmd_wizard(_):
-    cfg = load_config()
-    print("trafficgen wizard - Enter keeps the default\n")
-    s = cfg["source"]
-    s["interface"] = ask("Interface", s["interface"])
-    prim, prefix = iface_info(s["interface"])
-    print("Primary IP: %s/%d" % (prim, prefix))
-    s["first"] = ask("First extra source IP (empty = none)", s["first"] or "")
-    s["count"] = int(ask("Number of extra source IPs", s["count"])) if s["first"] else 0
-    cfg["duration_minutes"] = int(ask("Duration in minutes (0 = until stopped)", cfg["duration_minutes"]))
-    cfg["threads_per_ip"] = int(ask("Sessions per source IP", cfg["threads_per_ip"]))
-    cfg["intensity"] = ask("Intensity (low/medium/high)", cfg["intensity"])
-    print("\nGroup weights (0 = off):", ", ".join(cfg["groups"]))
-    for g in list(cfg["groups"]):
-        cfg["groups"][g] = int(ask("  weight %s" % g, cfg["groups"][g]))
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)
-    print("\nSaved to %s. Start with: trafficgen start" % CONFIG_PATH)
+def cmd_passwd(args):
+    import webui
+    pw = open(args.file).read().strip() if args.file else __import__("getpass").getpass("New admin password: ")
+    webui.set_password(pw)
+    print("Admin password set.")
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="trafficgen")
+    ap = argparse.ArgumentParser(prog="trafficgen", description="Control the test via the web GUI; CLI is for debugging.")
     ap.add_argument("--config")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name, fn in (("run", cmd_run), ("start", cmd_start)):
-        p = sub.add_parser(name, help="run in foreground" if name == "run" else "run in background (systemd)")
-        p.add_argument("-d", "--duration", type=int, help="minutes (0 = until stopped)")
-        p.add_argument("-i", "--intensity", choices=list(THINK))
-        p.add_argument("-t", "--threads", type=int, help="sessions per source IP")
-        p.add_argument("-g", "--groups", help="comma list of groups to enable, e.g. streaming,collab")
-        p.set_defaults(fn=fn)
-    for name, fn in (("stop", cmd_stop), ("status", cmd_status), ("apps", cmd_apps), ("wizard", cmd_wizard)):
-        sub.add_parser(name).set_defaults(fn=fn)
+    p = sub.add_parser("run", help="run a test in the foreground using the configured networks")
+    p.add_argument("-d", "--duration", type=int, help="minutes (0 = until Ctrl-C)")
+    p.add_argument("-i", "--intensity", choices=list(THINK))
+    p.add_argument("-t", "--threads", type=int)
+    p.add_argument("-g", "--groups")
+    p.set_defaults(fn=cmd_run)
+    sub.add_parser("apps").set_defaults(fn=cmd_apps)
+    p = sub.add_parser("passwd", help="set the web GUI admin password")
+    p.add_argument("--file", help="read password from file")
+    p.set_defaults(fn=cmd_passwd)
     args = ap.parse_args()
     if args.config:
         global CONFIG_PATH

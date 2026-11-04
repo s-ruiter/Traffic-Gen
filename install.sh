@@ -2,6 +2,10 @@
 # Traffic-Gen LXC installer for Proxmox VE (wizard driven).
 # Run as root on the Proxmox host:
 #   git clone http://10.10.100.3:8010/sander/Traffic-Gen.git && cd Traffic-Gen && bash install.sh
+#
+# The LXC gets two NICs:
+#   eth0 = management (web GUI, set up here)
+#   eth1 = test traffic (no IP; source networks/VLANs/IP count are set in the GUI)
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-http://10.10.100.3:8010/sander/Traffic-Gen.git}"
@@ -28,7 +32,7 @@ menu()  { # menu "text" tag item tag item ...
 valid_cidr() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; }
 valid_ip()   { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
-whiptail --title "$TITLE" --msgbox "This wizard creates a Debian 12 LXC that generates realistic\nuser traffic (Netflix, Teams, O365, Facebook, ...) from multiple\nsource IPs, to monitor a FortiGate (SD-WAN, App Control, Web Filter).\n\nYou can change everything later with 'trafficgen wizard' inside the LXC." 14 70
+whiptail --title "$TITLE" --msgbox "This wizard creates a Debian 12 LXC with two NICs:\n  eth0 = management (web GUI)\n  eth1 = test traffic (no IP; source networks, VLANs and the\n         number of source IPs are set in the web GUI)\n\nThe LXC generates realistic user traffic (Netflix, Teams, O365,\nFacebook, ...) to monitor a FortiGate (SD-WAN, App Control, Web Filter)." 16 72
 
 # --- container settings ------------------------------------------------------
 CTID=$(ask "Container ID" "$(pvesh get /cluster/nextid)")
@@ -38,40 +42,33 @@ HOSTNAME=$(ask "Hostname" "trafficgen")
 mapfile -t BRIDGES < <(ip -o link show type bridge | awk -F': ' '{print $2}')
 [[ ${#BRIDGES[@]} -gt 0 ]] || BRIDGES=(vmbr0)
 args=(); for b in "${BRIDGES[@]}"; do args+=("$b" "bridge"); done
-BRIDGE=$(menu "Network bridge" "${args[@]}")
-VLAN=$(ask "VLAN tag (empty = none)" "")
 
+# management NIC (eth0)
+MBRIDGE=$(menu "Bridge for the MANAGEMENT interface (eth0, web GUI)" "${args[@]}")
+MVLAN=$(ask "Management VLAN tag (empty = none)" "")
 while :; do
-  MODE=$(menu "IP configuration of the LXC (primary source IP)" static "Static IP" dhcp "DHCP")
+  MODE=$(menu "Management IP configuration" static "Static IP" dhcp "DHCP")
   if [[ $MODE == static ]]; then
-    IPCIDR=$(ask "IP address with prefix (e.g. 192.168.10.50/24)" "")
+    IPCIDR=$(ask "Management IP with prefix (e.g. 192.168.1.50/24)" "")
     valid_cidr "$IPCIDR" || { whiptail --msgbox "Invalid format. Use a.b.c.d/nn" 8 50; continue; }
-    GW=$(ask "Gateway (the FortiGate interface IP)" "${IPCIDR%.*/*}.1")
+    GW=$(ask "Management gateway" "${IPCIDR%.*/*}.1")
     valid_ip "$GW" || { whiptail --msgbox "Invalid gateway" 8 50; continue; }
-    NETCFG="name=eth0,bridge=$BRIDGE,ip=$IPCIDR,gw=$GW"
+    NET0="name=eth0,bridge=$MBRIDGE,ip=$IPCIDR,gw=$GW,firewall=0"
   else
-    IPCIDR=""; NETCFG="name=eth0,bridge=$BRIDGE,ip=dhcp"
+    IPCIDR=""; GW=""; NET0="name=eth0,bridge=$MBRIDGE,ip=dhcp,firewall=0"
   fi
   break
 done
-[[ -n $VLAN ]] && NETCFG+=",tag=$VLAN"
-DNS=$(ask "DNS server (empty = Proxmox host default)" "${GW:-}")
+[[ -n $MVLAN ]] && NET0+=",tag=$MVLAN"
+DNS=$(ask "DNS server for management (empty = Proxmox host default)" "$GW")
 
-EXTRA_FIRST=""; EXTRA_COUNT=0
-if [[ $MODE == static ]]; then
-  EXTRA_COUNT=$(ask "Number of EXTRA source IPs (same subnet, 0 = only the primary IP)" "9")
-  if [[ $EXTRA_COUNT -gt 0 ]]; then
-    base="${IPCIDR%/*}"; last="${base##*.}"
-    EXTRA_FIRST=$(ask "First extra source IP (they run consecutively from here)" "${base%.*}.$((last+1))")
-    valid_ip "$EXTRA_FIRST" || die "Invalid IP: $EXTRA_FIRST"
-  fi
-else
-  whiptail --msgbox "DHCP selected: only the DHCP address is used as source.\nExtra source IPs need static config; set them later in\n/etc/trafficgen/config.yaml (trafficgen wizard)." 10 60
-fi
+# traffic NIC (eth1)
+TBRIDGE=$(menu "Bridge for the TRAFFIC interface (eth1, towards the FortiGate)" "${args[@]}")
+TVLAN=$(ask "Tag for eth1 (empty = trunk/untagged; use VLANs in the GUI)" "")
+NET1="name=eth1,bridge=$TBRIDGE,firewall=0"
+[[ -n $TVLAN ]] && NET1+=",tag=$TVLAN"
 
-DURATION=$(ask "Default test duration in minutes (0 = until stopped)" "10")
-INTENSITY=$(menu "Traffic intensity (think time between actions)" medium "Medium" low "Low (calm office)" high "High (busy)")
-THREADS=$(ask "Parallel sessions per source IP" "2")
+PORT=$(ask "Web GUI port (HTTPS)" "8443")
 
 mapfile -t STORES < <(pvesm status -content rootdir | awk 'NR>1{print $1}')
 [[ ${#STORES[@]} -gt 0 ]] || die "No storage with content type rootdir found."
@@ -81,18 +78,22 @@ DISK=$(ask "Disk size (GB)" "4")
 CORES=$(ask "CPU cores" "2")
 MEM=$(ask "Memory (MB)" "1024")
 
-PW=$(whiptail --title "$TITLE" --passwordbox "Root password for the LXC (empty = random, console access via 'pct enter')" 10 70 3>&1 1>&2 2>&3) || exit 1
-[[ -n $PW ]] || PW=$(openssl rand -base64 12)
+while :; do
+  APW=$(whiptail --title "$TITLE" --passwordbox "Admin password for the WEB GUI (min. 8 characters; empty = generate)" 10 70 3>&1 1>&2 2>&3) || exit 1
+  if [[ -z $APW ]]; then APW=$(openssl rand -base64 12 | tr -d '/+='); break; fi
+  [[ ${#APW} -ge 8 ]] && break
+  whiptail --msgbox "Password too short." 8 40
+done
+ROOTPW=$(openssl rand -base64 12)
 
 whiptail --title "$TITLE" --yesno "Create LXC with:\n
  CTID/hostname : $CTID / $HOSTNAME
- Network       : $NETCFG
- DNS           : ${DNS:-host default}
- Extra IPs     : ${EXTRA_COUNT} from ${EXTRA_FIRST:-n/a}
- Duration      : $DURATION min, intensity $INTENSITY, $THREADS sessions/IP
+ eth0 (mgmt)   : $NET0
+ eth1 (traffic): $NET1
+ GUI           : https://<mgmt-ip>:$PORT
  Resources     : $CORES cores, ${MEM}MB, ${DISK}GB on $STORAGE
 
-Continue?" 20 70 || exit 1
+Continue?" 17 78 || exit 1
 
 # --- template ----------------------------------------------------------------
 TSTORE=$(pvesm status -content vztmpl | awk 'NR>1{print $1; exit}')
@@ -110,8 +111,8 @@ fi
 echo ">> Creating LXC $CTID"
 create=(pct create "$CTID" "$TEMPLATE" --hostname "$HOSTNAME" --unprivileged 1
   --cores "$CORES" --memory "$MEM" --swap 256 --rootfs "$STORAGE:$DISK"
-  --net0 "$NETCFG" --features nesting=1 --onboot 1 --password "$PW"
-  --description "Traffic-Gen: FortiGate traffic generator")
+  --net0 "$NET0" --net1 "$NET1" --features nesting=1 --onboot 1 --password "$ROOTPW"
+  --description "Traffic-Gen: FortiGate traffic generator (web GUI on mgmt IP :$PORT)")
 [[ -n $DNS ]] && create+=(--nameserver "$DNS")
 "${create[@]}"
 pct start "$CTID"
@@ -120,64 +121,74 @@ echo ">> Waiting for network"
 for _ in $(seq 1 30); do
   pct exec "$CTID" -- ping -c1 -W1 deb.debian.org &>/dev/null && break || sleep 2
 done
-pct exec "$CTID" -- ping -c1 -W2 deb.debian.org &>/dev/null || die "LXC has no internet/DNS - check gateway/firewall. Container $CTID left running for debugging."
+pct exec "$CTID" -- ping -c1 -W2 deb.debian.org &>/dev/null || die "LXC has no internet/DNS on the management network - check gateway/DNS/firewall. Container $CTID left running for debugging."
 
 # --- provision ---------------------------------------------------------------
 echo ">> Installing packages"
-pct exec "$CTID" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml iproute2 iputils-ping iputils-arping logrotate ca-certificates >/dev/null'
+pct exec "$CTID" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml iproute2 iputils-ping iputils-arping openssl logrotate ca-certificates >/dev/null'
 
-pct exec "$CTID" -- mkdir -p /opt/trafficgen /etc/trafficgen /var/log/trafficgen
-pct push "$CTID" "$HERE/src/trafficgen.py" /opt/trafficgen/trafficgen.py --perms 755
-pct push "$CTID" "$HERE/src/profiles.yaml" /opt/trafficgen/profiles.yaml
+pct exec "$CTID" -- mkdir -p /opt/trafficgen/web /etc/trafficgen/tls /var/log/trafficgen /var/lib/trafficgen
+for f in trafficgen.py netconf.py webui.py profiles.yaml; do
+  pct push "$CTID" "$HERE/src/$f" "/opt/trafficgen/$f" --perms 644
+done
+pct push "$CTID" "$HERE/src/web/index.html" /opt/trafficgen/web/index.html --perms 644
+pct exec "$CTID" -- chmod 755 /opt/trafficgen/trafficgen.py
 pct exec "$CTID" -- ln -sf /opt/trafficgen/trafficgen.py /usr/local/bin/trafficgen
 
-TMPCFG=$(mktemp)
-cat > "$TMPCFG" <<EOF
-source:
-  interface: eth0
-  include_primary: true
-  first: "${EXTRA_FIRST}"
-  count: ${EXTRA_COUNT}
-  keep_ips: false
-duration_minutes: ${DURATION}
-threads_per_ip: ${THREADS}
-intensity: ${INTENSITY}
-tls_verify: false
-dns_server: "${DNS}"
-groups:
-  office365: 25
-  collab: 20
-  streaming: 20
-  social: 10
-  saas: 10
-  web: 10
-  updates: 3
-  download: 2
-  sdwan: 5
-  webfilter: 0   # set >0 to include web filter test sites (expect blocks)
-  security: 0    # set >0 to include EICAR download tests
-EOF
-pct push "$CTID" "$TMPCFG" /etc/trafficgen/config.yaml; rm -f "$TMPCFG"
+MGMT_IP=${IPCIDR%/*}
+[[ -n $MGMT_IP ]] || MGMT_IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
+
+echo ">> TLS certificate + admin password"
+pct exec "$CTID" -- openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$HOSTNAME" \
+  -addext "subjectAltName=DNS:$HOSTNAME,IP:$MGMT_IP" \
+  -keyout /etc/trafficgen/tls/server.key -out /etc/trafficgen/tls/server.crt 2>/dev/null
+pct exec "$CTID" -- chmod 600 /etc/trafficgen/tls/server.key
+
+TMPPW=$(mktemp); chmod 600 "$TMPPW"; printf '%s' "$APW" > "$TMPPW"
+pct push "$CTID" "$TMPPW" /root/.tg-pw --perms 600; rm -f "$TMPPW"
+pct exec "$CTID" -- bash -c 'trafficgen passwd --file /root/.tg-pw && rm -f /root/.tg-pw'
+
+pct exec "$CTID" -- bash -c "printf 'mgmt_interface: eth0\n' > /etc/trafficgen/config.yaml"
+
+TMPU=$(mktemp)
+cat > "$TMPU" <<UNIT
+[Unit]
+Description=Traffic-Gen web GUI and engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=TRAFFICGEN_PORT=$PORT
+ExecStart=/usr/bin/python3 /opt/trafficgen/webui.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+pct push "$CTID" "$TMPU" /etc/systemd/system/trafficgen-web.service; rm -f "$TMPU"
 
 TMPLR=$(mktemp)
 printf '/var/log/trafficgen/*.log {\n  weekly\n  rotate 4\n  compress\n  missingok\n  notifempty\n  copytruncate\n}\n' > "$TMPLR"
 pct push "$CTID" "$TMPLR" /etc/logrotate.d/trafficgen; rm -f "$TMPLR"
 
-# keep ARP/neighbour behaviour sane with many source IPs on one interface
-pct exec "$CTID" -- bash -c 'echo "net.ipv4.conf.all.arp_announce=2" > /etc/sysctl.d/99-trafficgen.conf; sysctl -q -p /etc/sysctl.d/99-trafficgen.conf || true'
+pct exec "$CTID" -- systemctl daemon-reload
+pct exec "$CTID" -- systemctl enable --now trafficgen-web.service
+sleep 2
+pct exec "$CTID" -- systemctl is-active --quiet trafficgen-web.service \
+  || echo "WARNING: service not active - check: pct exec $CTID -- journalctl -u trafficgen-web"
 
-IPSHOW=${IPCIDR%/*}; [[ -n $IPSHOW ]] || IPSHOW=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
-cat <<EOF
+cat <<DONE
 
 =====================================================================
- Traffic-Gen LXC $CTID ($HOSTNAME) ready - primary IP: $IPSHOW
- Root password: $PW
+ Traffic-Gen LXC $CTID ($HOSTNAME) is ready.
 
- pct enter $CTID
-   trafficgen start            # run in background (default ${DURATION} min)
-   trafficgen start -d 30      # 30 minutes
-   trafficgen start -g streaming,collab -i high
-   trafficgen status | stop | apps | wizard
- Logs: /var/log/trafficgen/requests.log, last-run.json
+ Web GUI : https://$MGMT_IP:$PORT   (self-signed certificate)
+ Login   : admin password: $APW
+ LXC root password (console only): $ROOTPW
+
+ Next: open the GUI > Netwerk, add a source network on eth1
+ (VLAN, first IP, gateway, number of IPs) and click Toepassen.
+ Then start a test from the Dashboard.
 =====================================================================
-EOF
+DONE
