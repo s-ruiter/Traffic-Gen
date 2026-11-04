@@ -8,6 +8,9 @@
 #   eth1 = test traffic (no IP; source networks/VLANs/IP count are set in the GUI)
 set -euo pipefail
 
+# Everything lives in main() so bash has read the whole script before we touch
+# stdin (needed for `curl ... | bash`).
+main() {
 REPO_URL="${REPO_URL:-http://10.10.100.3:8010/sander/Traffic-Gen.git}"
 TITLE="Traffic-Gen LXC installer"
 
@@ -198,3 +201,6 @@ cat <<DONE
  Then start a test from the Dashboard.
 =====================================================================
 DONE
+}
+
+main "$@"; exit $?
