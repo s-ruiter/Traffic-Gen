@@ -92,6 +92,25 @@ apps:
   wf-games:     {group: webfilter, weight: 2, urls: ["https://store.steampowered.com/", "https://www.roblox.com/", "https://www.epicgames.com/"]}
   wf-social-misc: {group: webfilter, weight: 1, urls: ["https://www.pinterest.com/", "https://www.snapchat.com/"]}
 
-  # ---------------- Security tests (disabled by default)
-  # EICAR is the harmless standard antivirus test file.
-  eicar:        {group: security, weight: 1, max_bytes: 100000, urls: ["https://secure.eicar.org/eicar.com.txt", "http://www.eicar.org/download/eicar.com.txt"]}
+  # ---------------- Malware / AV tests (group "malware", disabled by default)
+  # ONLY standard, harmless detection-test files are used (EICAR, WICAR). Nothing is saved to disk.
+  # expect: block  -> a 200 response with the file counts as MISSED, a block page / reset as DETECTED.
+  # Plain HTTP (AV works without SSL inspection) - only WICAR still serves EICAR over HTTP.
+  eicar-http:   {group: malware, weight: 3, expect: block, max_bytes: 100000, urls: ["http://malware.wicar.org/data/eicar.com"]}
+  # HTTPS: only detectable when the policy uses SSL deep inspection (otherwise expect "missed").
+  eicar-https:  {group: malware, weight: 3, expect: block, max_bytes: 100000, urls: ["https://secure.eicar.org/eicar.com", "https://secure.eicar.org/eicar.com.txt"]}
+  eicar-zip:    {group: malware, weight: 2, expect: block, max_bytes: 100000, urls: ["https://secure.eicar.org/eicar_com.zip"]}
+  # Informational (no pass/fail expectation): exploit-test pages and an IDS test response.
+  wicar-pages:  {group: malware, weight: 1, max_bytes: 100000, urls: ["http://malware.wicar.org/data/ms14_064_ole_not_xp.html", "http://malware.wicar.org/data/js_crypto_miner.html"]}
+  ids-testnids: {group: malware, weight: 1, max_bytes: 20000, urls: ["http://testmynids.org/uid/index.html"]}
+
+  # ---------------- IOC / botnet-like behaviour (group "ioc", disabled by default)
+  # Only DNS queries and bare TCP connects (no payload) are ever sent to indicators; nothing is downloaded from them.
+  # Compare the sent list in requests.log with the FortiGate botnet / DNS filter / IPS logs.
+  ioc-dga:      {group: ioc, weight: 4, dga: 5}                      # DGA-like lookups (NXDOMAIN storm)
+  ioc-dnstunnel: {group: ioc, weight: 2, tunnel: ["example.com"]}    # long hex subdomains, TXT queries
+  ioc-ddns:     {group: ioc, weight: 2, dns: ["test-host.duckdns.org", "test-host.ddns.net", "test-host.no-ip.org", "test-host.hopto.org"]}
+  ioc-mining-dns: {group: ioc, weight: 2, dns: ["pool.supportxmr.com", "xmr.pool.minergate.com", "pool.minexmr.com", "xmrpool.eu"]}
+  ioc-mining-tcp: {group: ioc, weight: 1, connect: ["pool.supportxmr.com:3333", "pool.minexmr.com:4444"]}   # needs "TCP connect" switch
+  ioc-tor:      {group: ioc, weight: 1, connect: ["128.31.0.34:9131", "86.59.21.38:443", "194.109.206.212:443"]}  # Tor directory authorities; needs "TCP connect" switch
+  ioc-feodo-c2: {group: ioc, weight: 2, feed: feodo}               # Feodo botnet C2 IPs; needs both IOC switches

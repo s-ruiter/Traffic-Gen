@@ -94,6 +94,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}
 <section id="p-mix" class="hide">
  <h1>Verkeersmix</h1><p class="sub">Bepaal welk soort verkeer hoe vaak voorkomt. Gewicht 0 schakelt een groep uit.</p>
  <div id="mmsg" class="msg hide"></div>
+ <div class="msg" id="mixwarn"><b>Beveiligingstests.</b> <i>Malware-test</i> gebruikt alleen standaard, onschadelijke testbestanden (EICAR, WICAR); een download die door de FortiGate wordt doorgelaten telt als <i>gemist</i>. <i>IOC / botnet-gedrag</i> stuurt alleen DNS-queries (DGA-patronen, DNS-tunneling, dynamic DNS, mining-pools) en op verzoek kale TCP-connects, zonder data of downloads. Beide staan standaard uit; zet ze alleen aan op netwerken waar je dit mag testen. De extra IOC-schakelaars staan onder Instellingen.</div>
  <div class="card" id="mixbox"></div>
  <button id="msave">Opslaan</button>
 </section>
@@ -113,6 +114,12 @@ input[type=range]{padding:0;accent-color:var(--acc)}
  <div id="smsg" class="msg hide"></div>
  <div class="card"><h2>TLS-certificaat controleren</h2>
   <label class="apps"><span><input type="checkbox" id="tlsv"> Controleer servercertificaten (uit laten bij SSL deep inspection met eigen CA)</span></label><button class="sec" id="tlssave">Opslaan</button></div>
+ <div class="card"><h2>IOC-tests</h2>
+  <div class="apps" style="flex-direction:column;gap:10px">
+   <label><input type="checkbox" id="iocconn"> Kale TCP-connects naar IOC-doelen toestaan (Tor directory authorities, mining-pool poorten). Er wordt niets verstuurd; de verbinding wordt direct gesloten.</label>
+   <label><input type="checkbox" id="iocfeed"> Botnet C2-IP's ophalen (abuse.ch Feodo Tracker, 1x per dag) en daar kale TCP-connects naar doen. Vereist ook de schakelaar hierboven.</label>
+   <div><label class="f">FortiGuard block-portal IP's (DNS-antwoord = geblokkeerd, kommagescheiden)</label><input id="blockips" style="max-width:340px"></div></div>
+  <button class="sec" id="iocsave" style="margin-top:12px">Opslaan</button></div>
  <div class="card"><h2>Wachtwoord wijzigen</h2><div class="grid" style="max-width:340px">
   <div><label class="f">Huidig</label><input type="password" id="pw0"></div><div><label class="f">Nieuw (min. 8 tekens)</label><input type="password" id="pw1"></div>
   <button id="pwsave">Wijzigen</button></div></div>
@@ -170,19 +177,20 @@ async function poll(){
  const ser=s.series,now=ser.length?ser[ser.length-1]:null,prev=ser.length>2?ser[ser.length-3]:null;
  let mb=0,rps=0;if(now&&prev&&now[0]>prev[0]){mb=(now[2]-prev[2])*8/(now[0]-prev[0])/1e6;rps=(now[1]-prev[1])/(now[0]-prev[0])}
  $("#kpis").innerHTML=kpi("Doorvoer",mb.toFixed(1)+" Mbit/s")+kpi("Requests",fmt(tr))+kpi("Per seconde",rps.toFixed(1))+kpi("Data",fbytes(t.bytes||0))+
-  kpi("Geslaagd",tr?Math.round(ok/tr*100)+"%":"–","ok")+kpi("Geblokkeerd",fmt(t.blocked||0),(t.blocked?"warn":""))+kpi("Fouten",fmt(t.error||0),(t.error?"bad":""))+kpi("Bron-IP's",s.sources);
+  kpi("Geslaagd",tr?Math.round(ok/tr*100)+"%":"–","ok")+kpi("Geblokkeerd",fmt(t.blocked||0),(t.blocked?"warn":""))+kpi("Fouten",fmt(t.error||0),(t.error?"bad":""))+kpi("Bron-IP's",s.sources)+
+  ((t.ex_blocked||0)+(t.ex_missed||0)?kpi("Detectiegraad malware",Math.round((t.ex_blocked||0)/((t.ex_blocked||0)+(t.ex_missed||0))*100)+"%",(t.ex_missed?"bad":"ok"))+kpi("Gemist (doorgelaten)",fmt(t.ex_missed||0),(t.ex_missed?"bad":"")):"");
  const el=(s.finished||s.now)-s.started;$("#prog").classList.toggle("hide",false);
  $("#elapsed").textContent="Verstreken "+mmss(el);
  if(s.deadline){const tot=s.deadline-s.started;$("#progbar").style.width=Math.min(100,el/tot*100)+"%";$("#remain").textContent=running?"Nog "+mmss(s.deadline-s.now):"Afgerond"}
  else{$("#progbar").style.width=running?"100%":"0";$("#remain").textContent=running?"Loopt tot je stopt":"Gestopt"}
  const rows=Object.entries(s.apps).sort((a,b)=>b[1].requests-a[1].requests),mx=Math.max(1,...rows.map(r=>r[1].requests||0));
- $("#appt").innerHTML="<tr><th>Applicatie</th><th></th><th class=n>Requests</th><th class=n>OK</th><th class=n>Geblokkeerd</th><th class=n>Fouten</th><th class=n>Data</th></tr>"+
-  rows.map(([n,c])=>`<tr><td>${esc(n)}</td><td style="width:22%"><span class="mini" style="width:${(c.requests||0)/mx*100}%"></span></td><td class=n>${c.requests||0}</td><td class="n ok">${c.ok||0}</td><td class="n warn">${c.blocked||0}</td><td class="n bad">${c.error||0}</td><td class=n>${fbytes(c.bytes||0)}</td></tr>`).join("");
+ $("#appt").innerHTML="<tr><th>Applicatie</th><th></th><th class=n>Requests</th><th class=n>OK</th><th class=n>Geblokkeerd</th><th class=n>Gemist</th><th class=n>Fouten</th><th class=n>Data</th></tr>"+
+  rows.map(([n,c])=>`<tr><td>${esc(n)}</td><td style="width:22%"><span class="mini" style="width:${(c.requests||0)/mx*100}%"></span></td><td class=n>${c.requests||0}</td><td class="n ok">${c.ok||0}</td><td class="n warn">${c.blocked||0}</td><td class="n bad">${c.missed||0}</td><td class="n bad">${c.error||0}</td><td class=n>${fbytes(c.bytes||0)}</td></tr>`).join("");
  const sr=Object.entries(s.src).sort((a,b)=>b[1].requests-a[1].requests);
  $("#srct").innerHTML="<tr><th>Bron-IP</th><th class=n>Requests</th><th class=n>OK</th><th class=n>Geblokkeerd</th><th class=n>Fouten</th><th class=n>Data</th></tr>"+
   sr.slice(0,40).map(([n,c])=>`<tr><td>${esc(n)}</td><td class=n>${c.requests||0}</td><td class="n ok">${c.ok||0}</td><td class="n warn">${c.blocked||0}</td><td class="n bad">${c.error||0}</td><td class=n>${fbytes(c.bytes||0)}</td></tr>`).join("")+(sr.length>40?`<tr><td class=mute colspan=6>+ ${sr.length-40} meer</td></tr>`:"");
  drawChart(ser);
- try{const l=await api("log?n=40");$("#log").innerHTML=l.map(r=>`<div><span class=mute>${esc(r.ts)}</span> ${esc(r.src)} <b>${esc(r.app)}</b> <span class="${r.result==="ok"?"ok":r.result==="blocked"?"warn":"bad"}">${esc(r.result)}${r.status?" "+r.status:""}</span> <span class=mute>${esc(r.url)}${r.ms?" · "+r.ms+" ms":""}</span></div>`).join("")}catch(e){}
+ try{const l=await api("log?n=40");$("#log").innerHTML=l.map(r=>`<div><span class=mute>${esc(r.ts)}</span> ${esc(r.src)} <b>${esc(r.app)}</b> <span class="${r.result==="ok"?"ok":(r.result==="blocked"||r.result==="reached")?"warn":"bad"}">${esc(r.result)}${r.status?" "+r.status:""}</span> <span class=mute>${esc(r.url)}${r.ms?" · "+r.ms+" ms":""}</span></div>`).join("")}catch(e){}
 }
 function drawChart(ser){
  const cv=$("#chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;
@@ -200,7 +208,7 @@ function drawChart(ser){
 // ---- mix
 let apps={};
 async function loadMix(){const [c,a]=await Promise.all([api("config"),api("apps")]);cfg=c;apps=a;const dis=new Set(c.disabled_apps);
- const names={office365:"Microsoft 365",collab:"Samenwerken",streaming:"Streaming",social:"Social media",saas:"SaaS / zakelijk",web:"Algemeen web",updates:"Updates",download:"Grote downloads",sdwan:"SD-WAN probes",webfilter:"Webfilter-test",security:"Security (EICAR)"};
+ const names={office365:"Microsoft 365",collab:"Samenwerken",streaming:"Streaming",social:"Social media",saas:"SaaS / zakelijk",web:"Algemeen web",updates:"Updates",download:"Grote downloads",sdwan:"SD-WAN probes",webfilter:"Webfilter-test",malware:"Malware-test (EICAR/WICAR)",ioc:"IOC / botnet-gedrag"};
  $("#mixbox").innerHTML=Object.keys(apps).sort().map(g=>{const w=c.groups[g]||0;return `<details class="grp"><summary><b>${esc(names[g]||g)}</b><input type="range" min="0" max="100" value="${w}" data-g="${esc(g)}"><span class="mute" data-v="${esc(g)}">${w}</span></summary>
   <div class="apps">${apps[g].map(x=>`<label><input type="checkbox" data-a="${esc(x.name)}" ${dis.has(x.name)?"":"checked"}>${esc(x.name)}</label>`).join("")}</div></details>`}).join("");
  $$("#mixbox input[type=range]").forEach(r=>r.oninput=()=>$(`[data-v="${r.dataset.g}"]`).textContent=r.value)}
@@ -235,8 +243,9 @@ $("#napply").onclick=async()=>{try{const r=await api("network/apply",{networks:n
 $("#ntest").onclick=async()=>{flash("#nmsg","Testen…","");try{const r=await api("network/test",{});flash("#nmsg",r.map(x=>`${x.name}: gateway ${x.gateway_ping?"✔":"✘ geen ping"} · DNS ${x.dns?"✔":"✘ "+x.detail}`).join("\n")||"Geen netwerken.","")}catch(e){flash("#nmsg",e.message,"err")}};
 
 // ---- settings
-async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#ver").textContent="Traffic-Gen "+(last.version||"")}
+async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#iocconn").checked=c.ioc_connect;$("#iocfeed").checked=c.ioc_feeds;$("#blockips").value=(c.block_ips||[]).join(", ");$("#ver").textContent="Traffic-Gen "+(last.version||"")}
 $("#tlssave").onclick=async()=>{try{await api("config",{tls_verify:$("#tlsv").checked});flash("#smsg","Opgeslagen.","good")}catch(e){flash("#smsg",e.message,"err")}};
+$("#iocsave").onclick=async()=>{try{await api("config",{ioc_connect:$("#iocconn").checked,ioc_feeds:$("#iocfeed").checked,block_ips:$("#blockips").value.split(",").map(x=>x.trim()).filter(Boolean)});flash("#smsg","Opgeslagen.","good")}catch(e){flash("#smsg","Ongeldige invoer: "+e.message,"err")}};
 $("#pwsave").onclick=async()=>{try{await api("password",{current:$("#pw0").value,new:$("#pw1").value});$("#pw0").value=$("#pw1").value="";flash("#smsg","Wachtwoord gewijzigd.","good")}catch(e){flash("#smsg",e.message,"err")}};
 $("#logout").onclick=async()=>{await api("logout",{});showLogin()};
 

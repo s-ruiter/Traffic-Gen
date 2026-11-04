@@ -40,5 +40,14 @@ Aan het eind krijg je de GUI-URL (`https://<mgmt-ip>:8443`, zelfondertekend cert
 ## Let op
 
 - Zorg dat de FortiGate-policy de bronnetwerken doorlaat naar internet.
-- Webfilter-testsites en EICAR staan standaard op gewicht 0.
+- Webfilter-, Malware- en IOC-groepen staan standaard op gewicht 0.
+
+## Security-efficiëntie testen
+
+Twee groepen in **Verkeersmix**, bedoeld om FortiGate AV, IPS, botnet/DNS-filter en webfilter te toetsen:
+
+- **Malware-test**: alleen standaard, onschadelijke testbestanden (EICAR via HTTP en HTTPS, EICAR-zip, WICAR-testpagina's, `testmynids.org`). Niets wordt opgeslagen. Een FortiGate-blokpagina of verbindingsreset telt als *geblokkeerd*, een doorgelaten bestand als *gemist*. Het dashboard toont de **detectiegraad**. HTTPS-bestanden zijn alleen detecteerbaar met SSL deep inspection; zonder inspectie verwacht je daar *gemist*.
+- **IOC / botnet-gedrag**: DGA-achtige DNS-lookups, DNS-tunneling (lange hex-subdomeinen, TXT), dynamic DNS en mining-pool lookups. Onder **Instellingen** kun je extra aanzetten: kale TCP-connects (Tor directory authorities, mining-poorten) en een dagelijks opgehaalde botnet-C2-IP-lijst (abuse.ch Feodo Tracker). Er wordt nooit data verstuurd of iets gedownload van IOC's; alleen DNS-queries en een TCP-connect die direct sluit.
+
+Voor IOC-verkeer is de FortiGate-log leidend: vergelijk `/var/log/trafficgen/requests.log` (bron-IP, tijd, doel) met de botnet-, DNS-filter- en IPS-logs. De GUI telt een DNS-antwoord met het FortiGuard block-portal-IP (instelbaar) als *geblokkeerd*.
 - Gebruik alleen op netwerken waar je dit mag doen.

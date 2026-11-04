@@ -25,7 +25,8 @@ import yaml
 
 CONFIG_PATH = os.environ.get("TRAFFICGEN_CONFIG", "/etc/trafficgen/config.yaml")
 USER_PROFILES = "/etc/trafficgen/profiles.yaml"
-DEFAULT_PROFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles.yaml")
+DEFAULT_PROFILES = os.path.join(os.path.dirname(os.path.realpath(__file__)), "profiles.yaml")
+STATE_DIR = os.environ.get("TRAFFICGEN_VARDIR", "/var/lib/trafficgen")
 LOG_DIR = os.environ.get("TRAFFICGEN_LOGDIR", "/var/log/trafficgen")
 UNIT = "trafficgen-run"
 
@@ -47,10 +48,13 @@ DEFAULT_CONFIG = {
     "intensity": "medium",         # low | medium | high
     "tls_verify": False,           # False = work behind SSL deep inspection
     "disabled_apps": [],
+    "ioc_feeds": False,            # fetch the Feodo C2 IP list (used only as DNS/connect targets)
+    "ioc_connect": False,          # allow bare TCP connects to IOC IPs/ports (no payload is sent)
+    "block_ips": ["208.91.112.55"],  # DNS answers that mean "FortiGuard block portal"
     "groups": {                    # relative weights of traffic groups; 0 = off
         "office365": 25, "collab": 20, "streaming": 20, "social": 10,
         "saas": 10, "web": 10, "updates": 3, "download": 2, "sdwan": 5,
-        "webfilter": 0, "security": 0,
+        "webfilter": 0, "malware": 0, "ioc": 0,
     },
 }
 
@@ -107,12 +111,26 @@ def _skip_name(buf, off):
         off += 1 + ln
 
 
+class DNSError(OSError):
+    def __init__(self, rcode):
+        super().__init__("DNS rcode %d" % rcode)
+        self.rcode = rcode
+
+
 def dns_resolve(name, server, src_ip, timeout=2.0):
-    """A-record lookup bound to src_ip (so DNS also shows the right source)."""
+    """A-record lookup bound to src_ip; raises DNSError/OSError when nothing resolves."""
+    rcode, ips = dns_query(name, server, src_ip, 1, timeout)
+    if rcode or not ips:
+        raise DNSError(rcode)
+    return ips
+
+
+def dns_query(name, server, src_ip, qtype=1, timeout=2.0):
+    """Raw DNS query bound to src_ip. Returns (rcode, [A records])."""
     tid = random.randrange(65536)
     q = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
     q += b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0"
-    q += struct.pack(">HH", 1, 1)
+    q += struct.pack(">HH", qtype, 1)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(timeout)
     try:
@@ -123,6 +141,7 @@ def dns_resolve(name, server, src_ip, timeout=2.0):
         s.close()
     if len(data) < 12 or struct.unpack(">H", data[:2])[0] != tid:
         raise OSError("bad DNS reply")
+    rcode = data[3] & 0x0F
     qd, an = struct.unpack(">HH", data[4:8])
     off = 12
     for _ in range(qd):
@@ -135,9 +154,7 @@ def dns_resolve(name, server, src_ip, timeout=2.0):
         if rtype == 1 and rdlen == 4:
             ips.append(socket.inet_ntoa(data[off:off + 4]))
         off += rdlen
-    if not ips:
-        raise OSError("no A record")
-    return ips
+    return rcode, ips
 
 
 # ---------------------------------------------------------------- HTTP(S)
@@ -183,12 +200,79 @@ def http_get(url, ip, src_ip, ua, max_bytes, ctx, timeout=10):
             if got < 4096:
                 head += chunk[:4096]
             got += len(chunk)
-        text = head.lower()
-        blocked = status == 403 and (b"fortigate" in text or b"fortiguard" in text or b"blocked" in text) \
-            or b"web page blocked" in text or b"fortinet" in text and b"block" in text
+        blocked = is_block_page(status, head.lower())
+        eicar = b"eicar-standard-antivirus-test-file" in head.lower()
     finally:
         c.close()
-    return status, got, blocked
+    return status, got, blocked, eicar
+
+
+BLOCK_MARKERS = (b"web page blocked", b"high security alert", b"you are not permitted to download",
+                 b"fortiguard", b"fortigate", b"application control", b"blocked by", b"access denied by")
+
+
+def is_block_page(status, text):
+    """Heuristic for FortiGate replacement messages (web filter, AV, app control)."""
+    if any(m in text for m in BLOCK_MARKERS):
+        return True
+    return status == 403 and b"block" in text
+
+
+# ------------------------------------------------------- IOC-style probes
+def tcp_connect(host, port, src_ip, timeout=4):
+    """Bare TCP connect, closed immediately. No data is sent. Returns 'connected' | 'refused' | 'timeout'."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.bind((src_ip, 0))
+        s.connect((host, int(port)))
+        return "connected"
+    except ConnectionRefusedError:
+        return "refused"
+    except (socket.timeout, TimeoutError):
+        return "timeout"
+    except ConnectionResetError:
+        return "reset"
+    finally:
+        s.close()
+
+
+def dga_name():
+    """Random algorithmically-generated-looking domain (will not exist)."""
+    letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+    lab = "".join(random.choice(letters) for _ in range(random.randint(10, 18)))
+    return lab + random.choice([".com", ".net", ".org", ".info", ".biz", ".top", ".xyz", ".ru", ".cn"])
+
+
+def tunnel_name(base):
+    """Long hex-encoded subdomain, typical for DNS tunnelling."""
+    return "%s.%s.%s" % (os.urandom(random.randint(20, 30)).hex(), os.urandom(8).hex(), base)
+
+
+FEEDS = {"feodo": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"}
+_IP_RE = __import__("re").compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def load_feed(name, max_age=86400):
+    """Return a cached list of indicators (IPs only), refreshed at most once a day."""
+    path = os.path.join(STATE_DIR, "feed-%s.txt" % name)
+    try:
+        if time.time() - os.path.getmtime(path) < max_age:
+            return [x for x in open(path).read().split() if x]
+    except OSError:
+        pass
+    try:
+        import urllib.request
+        raw = urllib.request.urlopen(FEEDS[name], timeout=10).read().decode("utf-8", "replace")
+        items = [ln.strip() for ln in raw.splitlines() if _IP_RE.match(ln.strip())]
+        os.makedirs(STATE_DIR, exist_ok=True)
+        open(path, "w").write("\n".join(items))
+        return items
+    except Exception:  # noqa - network/feed problems must never stop a test
+        try:
+            return [x for x in open(path).read().split() if x]
+        except OSError:
+            return []
 
 
 # ------------------------------------------------------------ UDP / ping
@@ -244,7 +328,21 @@ class Engine:
     def __init__(self, cfg, apps, stop_evt, sources):
         self.cfg, self.stop, self.sources = cfg, stop_evt, sources
         disabled = set(cfg.get("disabled_apps") or [])
-        self.apps = {n: a for n, a in apps.items() if n not in disabled}
+        self.feeds = {}
+        self.apps = {}
+        for n, a in apps.items():
+            if n in disabled:
+                continue
+            if a.get("feed"):          # needs the feed switch and connects
+                if not (cfg.get("ioc_feeds") and cfg.get("ioc_connect")):
+                    continue
+                self.feeds[a["feed"]] = load_feed(a["feed"])
+                if not self.feeds[a["feed"]]:
+                    continue
+            if a.get("connect") and not cfg.get("ioc_connect"):
+                continue
+            self.apps[n] = a
+        self.block_ips = set(cfg.get("block_ips") or [])
         self.stats = Stats()
         self.src_stats = Stats()
         self.recent = collections.deque(maxlen=300)
@@ -281,7 +379,14 @@ class Engine:
 
     def visit(self, src, name, app, cache, ua):
         ip_src = src["ip"]
-        targets = [(k, t) for k in ("urls", "stun", "ping") for t in app.get(k, [])]
+        expect_block = app.get("expect") == "block"
+        targets = [(k, t) for k in ("urls", "stun", "ping", "dns", "connect") for t in app.get(k, [])]
+        if app.get("dga"):
+            targets += [("dga", None)] * int(app["dga"])
+        for base in app.get("tunnel", []):
+            targets.append(("tunnel", base))
+        if app.get("feed"):
+            targets += [("feed", app["feed"])] * 3
         for kind, t in random.sample(targets, min(len(targets), random.randint(1, 3))):
             if self.stop.is_set():
                 return
@@ -293,11 +398,41 @@ class Engine:
                     if not ips or ips[1] < time.time():
                         ips = (dns_resolve(host, src["dns"], ip_src), time.time() + 60)
                         cache[host] = ips
-                    st, n, blocked = http_get(t, random.choice(ips[0]), ip_src, ua,
-                                              app.get("max_bytes", 400000), self.ctx)
-                    res = "blocked" if blocked else "ok"
-                    self.account(src, name, requests=1, bytes=n, **{res: 1})
+                    try:
+                        st, n, blocked, eicar = http_get(t, random.choice(ips[0]), ip_src, ua,
+                                                         app.get("max_bytes", 400000), self.ctx)
+                    except (ConnectionResetError, ssl.SSLEOFError, http.client.RemoteDisconnected, BrokenPipeError):
+                        if not expect_block:
+                            raise
+                        self.account(src, name, requests=1, blocked=1, ex_blocked=1)
+                        self.write(src=ip_src, app=name, url=t, result="blocked", detail="connection reset",
+                                   ms=int((time.time() - t0) * 1000))
+                        continue
+                    if expect_block:
+                        res = "blocked" if blocked else ("missed" if st == 200 else "ok")
+                        extra = {"ex_" + res: 1} if res in ("blocked", "missed") else {}
+                    else:
+                        res, extra = ("blocked" if blocked else "ok"), {}
+                    self.account(src, name, requests=1, bytes=n, **{res: 1}, **extra)
                     self.write(src=ip_src, app=name, url=t, result=res, status=st, bytes=n,
+                               ms=int((time.time() - t0) * 1000))
+                elif kind in ("dns", "dga", "tunnel"):
+                    qname = t if kind == "dns" else dga_name() if kind == "dga" else tunnel_name(t)
+                    rc, ips = dns_query(qname, src["dns"], ip_src, 16 if kind == "tunnel" else 1)
+                    # The *query* is the indicator; only a FortiGuard block-portal answer counts as blocked.
+                    res = "blocked" if set(ips) & self.block_ips else "ok"
+                    self.account(src, name, requests=1, **{res: 1})
+                    self.write(src=ip_src, app=name, url="dns://" + qname, result=res, rcode=rc,
+                               answer=",".join(ips[:2]), ms=int((time.time() - t0) * 1000))
+                elif kind in ("connect", "feed"):
+                    if kind == "feed":
+                        host, port = random.choice(self.feeds[t]), random.choice([443, 8080, 80, 8443])
+                    else:
+                        host, port = t.rsplit(":", 1)
+                    res = tcp_connect(host, port, ip_src)
+                    self.account(src, name, requests=1, **{("ok" if res == "connected" else "error"): 1})
+                    self.write(src=ip_src, app=name, url="tcp://%s:%s" % (host, port),
+                               result="reached" if res == "connected" else res,
                                ms=int((time.time() - t0) * 1000))
                 elif kind == "stun":
                     ok, n = stun_probe(t, ip_src, app.get("udp_burst_s", 0))
@@ -353,11 +488,14 @@ class Engine:
         snap = self.stats.snapshot()
         rows = sorted(snap.items(), key=lambda kv: -kv[1].get("requests", 0))
         g = lambda c, k: c.get(k, 0)
-        out = ["%-18s %8s %8s %8s %8s %10s" % ("app", "requests", "ok", "blocked", "error", "MB")]
+        out = ["%-18s %8s %8s %8s %8s %8s %10s" % ("app", "requests", "ok", "blocked", "missed", "error", "MB")]
         for n, c in rows:
-            out.append("%-18s %8d %8d %8d %8d %10.1f" % (n, g(c, "requests"), g(c, "ok"), g(c, "blocked"), g(c, "error"), g(c, "bytes") / 1e6))
+            out.append("%-18s %8d %8d %8d %8d %8d %10.1f" % (n, g(c, "requests"), g(c, "ok"), g(c, "blocked"), g(c, "missed"), g(c, "error"), g(c, "bytes") / 1e6))
         t = self.totals()
-        out.append("%-18s %8d %8d %8d %8d %10.1f" % ("TOTAL", g(t, "requests"), g(t, "ok"), g(t, "blocked"), g(t, "error"), g(t, "bytes") / 1e6))
+        out.append("%-18s %8d %8d %8d %8d %8d %10.1f" % ("TOTAL", g(t, "requests"), g(t, "ok"), g(t, "blocked"), g(t, "missed"), g(t, "error"), g(t, "bytes") / 1e6))
+        if g(t, "ex_blocked") + g(t, "ex_missed"):
+            out.append("Malware detection rate: %d%% (%d blocked, %d missed)" % (
+                100 * g(t, "ex_blocked") // (g(t, "ex_blocked") + g(t, "ex_missed")), g(t, "ex_blocked"), g(t, "ex_missed")))
         return "\n".join(out)
 
 

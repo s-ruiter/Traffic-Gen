@@ -24,7 +24,7 @@ AUTH_FILE = os.environ.get("TRAFFICGEN_AUTH", "/etc/trafficgen/auth.json")
 CERT = "/etc/trafficgen/tls/server.crt"
 KEY = "/etc/trafficgen/tls/server.key"
 SESSION_TTL = 12 * 3600
-VERSION = "2.0"
+VERSION = "2.1"
 
 
 # ----------------------------------------------------------------- auth
@@ -183,7 +183,8 @@ CTRL = Controller()
 # ----------------------------------------------------------- HTTP layer
 def config_view(cfg):
     return {k: cfg[k] for k in ("duration_minutes", "threads_per_ip", "intensity", "tls_verify", "groups",
-                                "disabled_apps", "networks", "mgmt_interface")}
+                                "disabled_apps", "networks", "mgmt_interface", "ioc_feeds", "ioc_connect",
+                                "block_ips")}
 
 
 class H(BaseHTTPRequestHandler):
@@ -296,8 +297,12 @@ class H(BaseHTTPRequestHandler):
                     cfg["groups"] = {g: max(0, min(100, int(w))) for g, w in body["groups"].items()}
                 if isinstance(body.get("disabled_apps"), list):
                     cfg["disabled_apps"] = [str(x) for x in body["disabled_apps"]]
-                if "tls_verify" in body:
-                    cfg["tls_verify"] = bool(body["tls_verify"])
+                for k in ("tls_verify", "ioc_feeds", "ioc_connect"):
+                    if k in body:
+                        cfg[k] = bool(body[k])
+                if isinstance(body.get("block_ips"), list):
+                    import ipaddress
+                    cfg["block_ips"] = [str(ipaddress.IPv4Address(str(x).strip())) for x in body["block_ips"] if str(x).strip()]
                 save_config(cfg)
                 return self._send(200, config_view(cfg))
             if u.path == "/api/network/apply":
