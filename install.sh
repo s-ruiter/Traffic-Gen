@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Traffic-Gen LXC installer for Proxmox VE (wizard driven).
 # Run as root on the Proxmox host:
-#   git clone http://10.10.100.3:8010/sander/Traffic-Gen.git && cd Traffic-Gen && bash install.sh
+#   git clone https://github.com/s-ruiter/Traffic-Gen.git && cd Traffic-Gen && bash install.sh
 #
 # The LXC gets two NICs:
 #   eth0 = management (web GUI, set up here)
@@ -11,7 +11,7 @@ set -euo pipefail
 # Everything lives in main() so bash has read the whole script before we touch
 # stdin (needed for `curl ... | bash`).
 main() {
-REPO_URL="${REPO_URL:-http://10.10.100.3:8010/sander/Traffic-Gen.git}"
+REPO_URL="${REPO_URL:-https://github.com/s-ruiter/Traffic-Gen.git}"
 TITLE="Traffic-Gen LXC installer"
 
 die() { echo "ERROR: $*" >&2; exit 1; }

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Update an existing Traffic-Gen LXC to the latest version from the repo.
 # Run as root on the Proxmox host:
-#   curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh | bash
 #   curl -fsSL .../update.sh | bash -s 105        # explicit container ID
 # Config, admin password, certificate and logs inside the LXC are left untouched.
 set -euo pipefail
 
 main() {
-  REPO_URL="${REPO_URL:-http://10.10.100.3:8010/sander/Traffic-Gen.git}"
+  REPO_URL="${REPO_URL:-https://github.com/s-ruiter/Traffic-Gen.git}"
   die() { echo "ERROR: $*" >&2; exit 1; }
   [[ $EUID -eq 0 ]] || die "Run as root on the Proxmox host."
   command -v pct >/dev/null || die "pct not found - run this on the Proxmox VE host."

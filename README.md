@@ -5,13 +5,13 @@ A Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, You
 ## Install (on the Proxmox host, as root)
 
 ```bash
-bash -c "$(curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/install.sh)"
 ```
 
 or from a clone:
 
 ```bash
-git clone http://10.10.100.3:8010/sander/Traffic-Gen.git
+git clone https://github.com/s-ruiter/Traffic-Gen.git
 cd Traffic-Gen && bash install.sh
 ```
 
@@ -29,9 +29,9 @@ At the end you get the GUI URL (`https://<mgmt-ip>:8443`, self-signed certificat
 Run on the Proxmox host as root. Configuration, password, certificate and logs are preserved; a running test is stopped by the restart.
 
 ```bash
-curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh | bash
 # several Traffic-Gen LXCs? pass the container ID:
-curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash -s 105
+curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh | bash -s 105
 ```
 
 ## In the GUI

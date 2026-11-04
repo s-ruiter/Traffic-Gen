@@ -26,7 +26,7 @@
     "name": "Sander Ruiter"
   },
   "updated": "2026-11-04",
-  "repository": "http://10.10.100.3:8010/sander/Traffic-Gen",
+  "repository": "https://github.com/s-ruiter/Traffic-Gen",
   "requirements": [
     {
       "label": "Proxmox VE",
@@ -49,12 +49,12 @@
     {
       "title": "Interactive install",
       "runOn": "Proxmox VE host (root)",
-      "command": "bash -c \"$(curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/install.sh)\""
+      "command": "bash -c \"$(curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/install.sh)\""
     },
     {
       "title": "Update an existing LXC",
       "runOn": "Proxmox VE host (root)",
-      "command": "curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash"
+      "command": "curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh | bash"
     }
   ],
   "steps": [
