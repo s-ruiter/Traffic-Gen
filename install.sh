@@ -196,8 +196,8 @@ cat <<DONE
  Login   : admin password: $APW
  LXC root password (console only): $ROOTPW
 
- Next: open the GUI > Netwerk, add a source network on eth1
- (VLAN, first IP, gateway, number of IPs) and click Toepassen.
+ Next: open the GUI > Network, add a source network on eth1
+ (VLAN, first IP, gateway, number of IPs) and click Apply.
  Then start a test from the Dashboard.
 =====================================================================
 DONE

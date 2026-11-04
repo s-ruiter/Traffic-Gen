@@ -357,7 +357,7 @@ class Engine:
             self.groups[a["group"]].append((name, a))
         self.active = [(g, w) for g, w in cfg["groups"].items() if w > 0 and g in self.groups]
         if not self.active:
-            raise ValueError("Geen verkeersgroep ingeschakeld.")
+            raise ValueError("No traffic group enabled.")
         self.started = time.time()
         self.finished = None
 

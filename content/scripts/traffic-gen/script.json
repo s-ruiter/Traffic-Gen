@@ -1,0 +1,49 @@
+{
+  "name": "Traffic-Gen",
+  "tagline": "Realistic multi-source user traffic and security-efficacy tests for FortiGate.",
+  "description": [
+    "Traffic-Gen is a Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, OS updates, SD-WAN probes and more) from multiple source IPs and VLANs. Use it to monitor and demo FortiGate SD-WAN, Application Control and Web Filter with traffic that looks like a real network.",
+    "It also tests security efficacy: harmless EICAR/WICAR files check antivirus and IPS, while DGA, DNS-tunnelling, dynamic DNS and mining-pool lookups check botnet and DNS filtering. The dashboard reports blocked, missed and a malware detection rate. The test duration, intensity and traffic mix are all configurable in the GUI."
+  ],
+  "category": "tool",
+  "platform": "proxmox",
+  "status": "beta",
+  "icon": "activity",
+  "products": ["FortiGate", "FortiOS"],
+  "tags": ["traffic-generator", "sd-wan", "application-control", "web-filter", "antivirus", "ioc", "lxc"],
+  "author": { "name": "Sander Ruiter", "email": "sander@ruiter.nu" },
+  "updated": "2026-11-04",
+  "repository": "http://10.10.100.3:8010/sander/Traffic-Gen",
+  "requirements": [
+    { "label": "Proxmox VE", "value": "7.x or 8.x" },
+    { "label": "Container", "value": "Debian 12 unprivileged LXC, 2 vCPU, 1 GB RAM, 4 GB disk by default (created by the installer)" },
+    { "label": "Network", "value": "Two NICs: eth0 for management, eth1 for test traffic (VLAN-aware bridge for multiple VLANs)" },
+    { "label": "Internet", "value": "Outbound access through the FortiGate under test" }
+  ],
+  "install": [
+    {
+      "title": "Interactive install",
+      "runOn": "Proxmox VE host (root)",
+      "command": "bash -c \"$(curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/install.sh)\""
+    },
+    {
+      "title": "Update an existing LXC",
+      "runOn": "Proxmox VE host (root)",
+      "command": "curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash"
+    }
+  ],
+  "steps": [
+    "Run the installer on the Proxmox host and answer the wizard (container ID, management network, traffic bridge, GUI port, admin password).",
+    "Open the web GUI on the printed URL (https://<management-ip>:8443) and sign in with the admin password.",
+    "Go to Network, add a source network (interface eth1, optional VLAN, first IP, number of IPs, FortiGate gateway) and click Apply.",
+    "Go to Traffic mix and choose which groups and apps to run. The Web filter, Malware and IOC groups are off by default.",
+    "On the Dashboard pick a duration and intensity, then click Start test.",
+    "Compare the dashboard and /var/log/trafficgen/requests.log with the FortiGate logs for application control, web filter, antivirus and botnet events."
+  ],
+  "screenshots": [
+    { "file": "01-dashboard.png", "caption": "Dashboard with live throughput, per-application and per-source results, and the malware detection rate." },
+    { "file": "02-traffic-mix.png", "caption": "Traffic mix: weight per group and per-app switches." },
+    { "file": "03-network.png", "caption": "Network: multiple source networks with VLANs, source IP ranges and FortiGate gateways." },
+    { "file": "04-settings.png", "caption": "Settings: TLS verification, IOC options and password." }
+  ]
+}

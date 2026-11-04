@@ -34,7 +34,7 @@ def _hash(pw, salt, it=200000):
 
 def set_password(pw):
     if len(pw) < 8:
-        raise ValueError("Wachtwoord moet minimaal 8 tekens zijn.")
+        raise ValueError("Password must be at least 8 characters.")
     salt = secrets.token_bytes(16)
     os.makedirs(os.path.dirname(AUTH_FILE), exist_ok=True)
     fd = os.open(AUTH_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -123,7 +123,7 @@ class Controller:
         cfg = tg.load_config()
         if not cfg["networks"]:
             netconf.teardown()
-            self.apply_log = ["Geen netwerken geconfigureerd."]
+            self.apply_log = ["No networks configured."]
             return
         try:
             self.apply_log, _ = netconf.apply(cfg["networks"], cfg["mgmt_interface"])
@@ -133,7 +133,7 @@ class Controller:
     def start(self, p):
         with self.lock:
             if self.running:
-                raise ValueError("Er draait al een test.")
+                raise ValueError("A test is already running.")
             cfg = tg.load_config()
             for k in ("duration_minutes", "threads_per_ip"):
                 if k in p:
@@ -145,11 +145,11 @@ class Controller:
             cfg["threads_per_ip"] = min(max(cfg["threads_per_ip"], 1), 20)
             sources = netconf.sources(cfg)
             if not sources:
-                raise ValueError("Er zijn geen bronnetwerken ingesteld. Ga naar 'Netwerk'.")
+                raise ValueError("No source networks configured. Go to 'Network'.")
             live = netconf.live_addrs()
             missing = [s["ip"] for s in sources if s["ip"] not in live.get(s["dev"], set())]
             if missing:
-                raise ValueError("%d bron-IP's staan niet actief. Klik eerst op 'Toepassen' bij Netwerk." % len(missing))
+                raise ValueError("%d source IPs are not active. Click 'Apply' on the Network page first." % len(missing))
             self.stop_evt = threading.Event()
             self.engine = tg.Engine(cfg, tg.load_profiles(), self.stop_evt, sources)
             dur = cfg["duration_minutes"]
@@ -203,7 +203,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -232,7 +232,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/session":
             return self._send(200, {"authed": self._authed()})
         if not self._authed():
-            return self._send(401, {"error": "login vereist"})
+            return self._send(401, {"error": "login required"})
         try:
             cfg = tg.load_config()
             if u.path == "/api/state":
@@ -267,15 +267,15 @@ class H(BaseHTTPRequestHandler):
             body = self._body()
             if u.path == "/api/login":
                 if SESS.locked(ip):
-                    return self._send(429, {"error": "Te veel pogingen, probeer het over 5 minuten opnieuw."})
+                    return self._send(429, {"error": "Too many attempts, try again in 5 minutes."})
                 if check_password(str(body.get("password", ""))):
                     t = SESS.new()
                     return self._send(200, {"ok": True}, extra={"Set-Cookie": "tg=%s; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=%d" % (t, SESSION_TTL)})
                 SESS.failed(ip)
                 time.sleep(1)
-                return self._send(401, {"error": "Onjuist wachtwoord."})
+                return self._send(401, {"error": "Incorrect password."})
             if not self._authed():
-                return self._send(401, {"error": "login vereist"})
+                return self._send(401, {"error": "login required"})
             if u.path == "/api/logout":
                 SESS.drop(self._token())
                 return self._send(200, {"ok": True}, extra={"Set-Cookie": "tg=; Path=/; Max-Age=0"})
@@ -307,7 +307,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, config_view(cfg))
             if u.path == "/api/network/apply":
                 if CTRL.running:
-                    return self._send(409, {"error": "Stop eerst de lopende test."})
+                    return self._send(409, {"error": "Stop the running test first."})
                 nets, errs = netconf.validate(body.get("networks", []), tg.load_config()["mgmt_interface"])
                 if errs:
                     return self._send(400, {"error": "\n".join(errs)})
@@ -320,7 +320,7 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, netconf.test(tg.load_config()))
             if u.path == "/api/password":
                 if not check_password(str(body.get("current", ""))):
-                    return self._send(400, {"error": "Huidig wachtwoord klopt niet."})
+                    return self._send(400, {"error": "Current password is incorrect."})
                 set_password(str(body.get("new", "")))
                 return self._send(200, {"ok": True})
         except ValueError as e:

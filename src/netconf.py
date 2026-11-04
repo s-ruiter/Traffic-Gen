@@ -74,56 +74,56 @@ def validate(networks, mgmt):
     existing = {i["name"] for i in interfaces()}
     mnet = mgmt_network(mgmt)
     if len(networks) > 16:
-        return [], ["Maximaal 16 netwerken."]
+        return [], ["Maximum of 16 networks."]
     for idx, n in enumerate(networks, 1):
-        tag = "Netwerk %d" % idx
+        tag = "Network %d" % idx
         try:
             parent = str(n.get("parent", "")).strip()
             if not DEV_RE.match(parent) or parent == mgmt or "." in parent:
-                errs.append("%s: ongeldige of niet toegestane interface '%s'." % (tag, parent))
+                errs.append("%s: invalid or disallowed interface '%s'." % (tag, parent))
                 continue
             if parent not in existing:
-                errs.append("%s: interface '%s' bestaat niet in deze LXC." % (tag, parent))
+                errs.append("%s: interface '%s' does not exist in this LXC." % (tag, parent))
                 continue
             vlan = n.get("vlan")
             vlan = int(vlan) if str(vlan or "").strip() else None
             if vlan is not None and not 1 <= vlan <= 4094:
-                errs.append("%s: VLAN moet tussen 1 en 4094 liggen." % tag)
+                errs.append("%s: VLAN must be between 1 and 4094." % tag)
                 continue
             prefix = int(n.get("prefix", 24))
             if not 8 <= prefix <= 30:
-                errs.append("%s: prefix moet tussen 8 en 30 liggen." % tag)
+                errs.append("%s: prefix must be between 8 and 30." % tag)
                 continue
             first = ipaddress.IPv4Address(str(n.get("first", "")).strip())
             gw = ipaddress.IPv4Address(str(n.get("gateway", "")).strip())
             count = int(n.get("count", 1))
             if not 1 <= count <= 250:
-                errs.append("%s: aantal IP's moet tussen 1 en 250 liggen." % tag)
+                errs.append("%s: number of IPs must be between 1 and 250." % tag)
                 continue
             net = ipaddress.ip_network("%s/%d" % (first, prefix), strict=False)
             last = first + (count - 1)
             if last not in net or gw not in net:
-                errs.append("%s: IP-bereik en gateway moeten in %s liggen." % (tag, net))
+                errs.append("%s: IP range and gateway must be inside %s." % (tag, net))
                 continue
             if first <= gw <= last:
-                errs.append("%s: de gateway %s valt binnen het bronbereik." % (tag, gw))
+                errs.append("%s: gateway %s is inside the source range." % (tag, gw))
                 continue
             dns = str(n.get("dns", "")).strip()
             if dns:
                 ipaddress.IPv4Address(dns)
             if mnet and net.overlaps(mnet):
-                errs.append("%s: %s overlapt met het management-netwerk %s." % (tag, net, mnet))
+                errs.append("%s: %s overlaps with the management network %s." % (tag, net, mnet))
                 continue
             for other, o in nets:
                 if net.overlaps(other):
-                    errs.append("%s: %s overlapt met %s." % (tag, net, o))
+                    errs.append("%s: %s overlaps with %s." % (tag, net, o))
                     break
             else:
                 nets.append((net, tag))
                 out.append({"name": str(n.get("name", "")).strip()[:40] or "net%d" % idx, "parent": parent, "vlan": vlan,
                             "first": str(first), "prefix": prefix, "gateway": str(gw), "count": count, "dns": dns})
         except (ValueError, TypeError) as e:
-            errs.append("%s: ongeldige invoer (%s)." % (tag, e))
+            errs.append("%s: invalid input (%s)." % (tag, e))
     return out, errs
 
 
@@ -163,7 +163,7 @@ def apply(networks, mgmt):
         if n["vlan"] and dev not in live:
             r = sh(["ip", "link", "add", "link", n["parent"], "name", dev, "type", "vlan", "id", str(n["vlan"])])
             if r.returncode:
-                log.append("%s: VLAN aanmaken mislukt: %s" % (n["name"], r.stderr.strip()))
+                log.append("%s: failed to create VLAN: %s" % (n["name"], r.stderr.strip()))
                 continue
             st["vlans"].append(dev)
             live.add(dev)
@@ -182,14 +182,14 @@ def apply(networks, mgmt):
                 subprocess.Popen(["arping", "-q", "-c", "1", "-w", "1", "-U", "-I", dev, ip],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                log.append("%s: %s toevoegen mislukt: %s" % (n["name"], ip, r.stderr.strip()))
+                log.append("%s: failed to add %s: %s" % (n["name"], ip, r.stderr.strip()))
         sh(["ip", "route", "replace", str(net), "dev", dev, "src", n["first"], "table", str(table)])
         r = sh(["ip", "route", "replace", "default", "via", n["gateway"], "dev", dev, "onlink", "table", str(table)])
         if r.returncode:
-            log.append("%s: route mislukt: %s" % (n["name"], r.stderr.strip()))
+            log.append("%s: route failed: %s" % (n["name"], r.stderr.strip()))
         sh(["ip", "rule", "add", "from", str(net), "lookup", str(table), "priority", str(prio)])
         st["rules"].append({"net": str(net), "table": table, "prio": prio})
-        log.append("%s: %s, %d/%d adressen actief via %s" % (n["name"], net, added, n["count"], dev))
+        log.append("%s: %s, %d/%d addresses active via %s" % (n["name"], net, added, n["count"], dev))
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     json.dump(st, open(STATE, "w"))
     return log, nets

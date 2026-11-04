@@ -1,53 +1,70 @@
 # Traffic-Gen
 
-Proxmox LXC met een web-GUI die realistisch gebruikersverkeer genereert (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) vanaf **meerdere bron-IP's en VLANs**, om een FortiGate (SD-WAN, Application Control, Web Filter) te monitoren.
+A Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) from **multiple source IPs and VLANs**, to monitor a FortiGate (SD-WAN, Application Control, Web Filter) and to test its security efficacy.
 
-## Uitrollen (op de Proxmox host, als root)
+## Install (on the Proxmox host, as root)
+
+```bash
+bash -c "$(curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/install.sh)"
+```
+
+or from a clone:
 
 ```bash
 git clone http://10.10.100.3:8010/sander/Traffic-Gen.git
 cd Traffic-Gen && bash install.sh
 ```
 
-De wizard maakt een Debian 12 LXC met **twee NIC's**:
+The wizard creates a Debian 12 LXC with **two NICs**:
 
-| NIC  | Doel | Instelling |
-|------|------|------------|
-| eth0 | Management (web-GUI) | bridge, VLAN, IP/gateway/DNS via de wizard |
-| eth1 | Testverkeer | bridge (optioneel tag); **geen IP**, de rest regel je in de GUI |
+| NIC  | Purpose | Setting |
+|------|---------|---------|
+| eth0 | Management (web GUI) | bridge, VLAN, IP/gateway/DNS from the wizard |
+| eth1 | Test traffic | bridge (optional tag); **no IP**, the rest is configured in the GUI |
 
-Aan het eind krijg je de GUI-URL (`https://<mgmt-ip>:8443`, zelfondertekend certificaat) en het admin-wachtwoord (zelf kiezen of laten genereren).
+At the end you get the GUI URL (`https://<mgmt-ip>:8443`, self-signed certificate) and the admin password (chosen by you or generated).
 
-## In de GUI
+## Update
 
-- **Dashboard**: looptijd (5 min tot 2 uur, tot stop, of eigen waarde), intensiteit, sessies per IP, start/stop, live doorvoer, requests, geblokkeerd/fouten, per applicatie en per bron-IP, laatste requests.
-- **Verkeersmix**: gewicht per groep (Microsoft 365, Samenwerken, Streaming, Social, SaaS, Web, Updates, Downloads, SD-WAN probes, Webfilter-test, EICAR) en per app aan/uit.
-- **Netwerk**: per bronnetwerk de interface (eth1), optioneel VLAN, eerste IP, prefix, aantal IP's, gateway en DNS. *Toepassen* maakt de VLAN-subinterface, voegt de IP's toe en zet source-based routing op, zodat testverkeer via de eigen gateway (de FortiGate) gaat en management gescheiden blijft. *Verbinding testen* pingt de gateway en test DNS vanaf het bronnetwerk.
-- **Instellingen**: wachtwoord wijzigen en TLS-certificaten van doelsites controleren (standaard uit, voor SSL deep inspection).
+Run on the Proxmox host as root. Configuration, password, certificate and logs are preserved; a running test is stopped by the restart.
 
-## Proxmox-notities
+```bash
+curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash
+# several Traffic-Gen LXCs? pass the container ID:
+curl -fsSL http://10.10.100.3:8010/sander/Traffic-Gen/raw/branch/main/update.sh | bash -s 105
+```
 
-- Gebruik je VLANs in de GUI, laat dan de eth1-tag in de wizard leeg en zorg dat de bridge VLAN-aware is en de gewenste VLANs doorlaat. Voor één vlak netwerk kun je een tag op eth1 zetten.
-- Netwerkwijzigingen worden toegepast bij *Toepassen* en bij het opstarten van de service. Tijdens een lopende test is toepassen geblokkeerd.
+## In the GUI
 
-## Logs en CLI
+- **Dashboard**: duration (5 min to 2 hours, until stopped, or custom), intensity, sessions per IP, start/stop, live throughput, requests, blocked/errors, per application and per source IP, latest requests.
+- **Traffic mix**: weight per group (Microsoft 365, Collaboration, Streaming, Social, SaaS, Web, Updates, Downloads, SD-WAN probes, Web filter test, Malware, IOC) and per-app on/off.
+- **Network**: per source network the interface (eth1), optional VLAN, first IP, prefix, number of IPs, gateway and DNS. *Apply* creates the VLAN sub-interface, adds the IPs and sets up source-based routing, so test traffic goes through its own gateway (the FortiGate) and management stays separate. *Test connection* pings the gateway and tests DNS from the source network.
+- **Settings**: change password, verify TLS certificates of target sites (off by default, for SSL deep inspection) and the IOC switches.
 
-- `/var/log/trafficgen/requests.log`: JSON per request, om met FortiGate-logs te vergelijken.
-- `trafficgen run -d 5` voert een test in de voorgrond uit met de ingestelde netwerken; `trafficgen apps` toont de profielen; `trafficgen passwd` reset het GUI-wachtwoord.
-- Eigen app-lijst: kopieer `/opt/trafficgen/profiles.yaml` naar `/etc/trafficgen/profiles.yaml`.
-- Service: `systemctl status trafficgen-web`, logs met `journalctl -u trafficgen-web`.
+## Proxmox notes
 
-## Let op
+- If you use VLANs in the GUI, leave the eth1 tag empty in the wizard and make sure the bridge is VLAN-aware and passes the VLANs you need. For a single flat network you can set a tag on eth1.
+- Network changes are applied on *Apply* and when the service starts. Applying is blocked while a test is running.
 
-- Zorg dat de FortiGate-policy de bronnetwerken doorlaat naar internet.
-- Webfilter-, Malware- en IOC-groepen staan standaard op gewicht 0.
+## Logs and CLI
 
-## Security-efficiëntie testen
+- `/var/log/trafficgen/requests.log`: JSON per request, to compare with FortiGate logs.
+- `trafficgen run -d 5` runs a foreground test with the configured networks; `trafficgen apps` lists the profiles; `trafficgen passwd` resets the GUI password.
+- Custom app list: copy `/opt/trafficgen/profiles.yaml` to `/etc/trafficgen/profiles.yaml`.
+- Service: `systemctl status trafficgen-web`, logs with `journalctl -u trafficgen-web`.
 
-Twee groepen in **Verkeersmix**, bedoeld om FortiGate AV, IPS, botnet/DNS-filter en webfilter te toetsen:
+## Notes
 
-- **Malware-test**: alleen standaard, onschadelijke testbestanden (EICAR via HTTP en HTTPS, EICAR-zip, WICAR-testpagina's, `testmynids.org`). Niets wordt opgeslagen. Een FortiGate-blokpagina of verbindingsreset telt als *geblokkeerd*, een doorgelaten bestand als *gemist*. Het dashboard toont de **detectiegraad**. HTTPS-bestanden zijn alleen detecteerbaar met SSL deep inspection; zonder inspectie verwacht je daar *gemist*.
-- **IOC / botnet-gedrag**: DGA-achtige DNS-lookups, DNS-tunneling (lange hex-subdomeinen, TXT), dynamic DNS en mining-pool lookups. Onder **Instellingen** kun je extra aanzetten: kale TCP-connects (Tor directory authorities, mining-poorten) en een dagelijks opgehaalde botnet-C2-IP-lijst (abuse.ch Feodo Tracker). Er wordt nooit data verstuurd of iets gedownload van IOC's; alleen DNS-queries en een TCP-connect die direct sluit.
+- Make sure the FortiGate policy allows the source networks to the internet.
+- The Web filter, Malware and IOC groups have weight 0 by default.
 
-Voor IOC-verkeer is de FortiGate-log leidend: vergelijk `/var/log/trafficgen/requests.log` (bron-IP, tijd, doel) met de botnet-, DNS-filter- en IPS-logs. De GUI telt een DNS-antwoord met het FortiGuard block-portal-IP (instelbaar) als *geblokkeerd*.
-- Gebruik alleen op netwerken waar je dit mag doen.
+## Testing security efficacy
+
+Two groups in **Traffic mix**, meant to test FortiGate AV, IPS, botnet/DNS filter and web filter:
+
+- **Malware test**: only standard, harmless test files (EICAR over HTTP and HTTPS, EICAR zip, WICAR test pages, `testmynids.org`). Nothing is stored. A FortiGate block page or connection reset counts as *blocked*, a file that gets through counts as *missed*. The dashboard shows the **detection rate**. HTTPS files are only detectable with SSL deep inspection; without inspection expect *missed*.
+- **IOC / botnet behaviour**: DGA-like DNS lookups, DNS tunnelling (long hex subdomains, TXT), dynamic DNS and mining pool lookups. Under **Settings** you can enable more: bare TCP connects (Tor directory authorities, mining ports) and a daily fetched botnet C2 IP list (abuse.ch Feodo Tracker). No data is ever sent to, or downloaded from, IOCs; only DNS queries and a TCP connect that closes immediately.
+
+For IOC traffic the FortiGate log is leading: compare `/var/log/trafficgen/requests.log` (source IP, time, target) with the botnet, DNS filter and IPS logs. The GUI counts a DNS answer with the FortiGuard block portal IP (configurable) as *blocked*.
+
+Only use this on networks where you are allowed to do so.
