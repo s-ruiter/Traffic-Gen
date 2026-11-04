@@ -17,10 +17,15 @@ command -v pct >/dev/null || die "pct not found - this must run on a Proxmox VE 
 command -v whiptail >/dev/null || apt-get install -y whiptail >/dev/null
 
 # --- locate sources (next to this script, or clone) -------------------------
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# When piped (curl ... | bash) stdin is the script itself: give whiptail the terminal.
+[[ -t 0 ]] || exec < /dev/tty || die "No terminal available for the wizard."
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 if [[ ! -f "$HERE/src/trafficgen.py" ]]; then
-  command -v git >/dev/null || apt-get install -y git >/dev/null
-  HERE="$(mktemp -d)"; git clone --depth 1 "$REPO_URL" "$HERE"
+  echo ">> Downloading Traffic-Gen sources"
+  HERE="$(mktemp -d)"; trap 'rm -rf -- "${HERE:?}"' EXIT
+  curl -fsSL "${ARCHIVE_URL:-${REPO_URL%.git}/archive/main.tar.gz}" | tar -xz -C "$HERE" --strip-components=1 \
+    || die "Could not download sources from ${REPO_URL%.git}"
 fi
 
 # --- wizard helpers ----------------------------------------------------------
