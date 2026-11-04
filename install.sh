@@ -130,7 +130,7 @@ pct exec "$CTID" -- ping -c1 -W2 deb.debian.org &>/dev/null || die "LXC has no i
 
 # --- provision ---------------------------------------------------------------
 echo ">> Installing packages"
-pct exec "$CTID" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml iproute2 iputils-ping iputils-arping openssl logrotate ca-certificates >/dev/null'
+pct exec "$CTID" -- bash -c 'export LC_ALL=C LANG=C DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml iproute2 iputils-ping iputils-arping openssl logrotate ca-certificates >/dev/null'
 
 pct exec "$CTID" -- mkdir -p /opt/trafficgen/web /etc/trafficgen/tls /var/log/trafficgen /var/lib/trafficgen
 for f in trafficgen.py netconf.py webui.py profiles.yaml; do
@@ -151,7 +151,8 @@ pct exec "$CTID" -- chmod 600 /etc/trafficgen/tls/server.key
 
 TMPPW=$(mktemp); chmod 600 "$TMPPW"; printf '%s' "$APW" > "$TMPPW"
 pct push "$CTID" "$TMPPW" /root/.tg-pw --perms 600; rm -f "$TMPPW"
-pct exec "$CTID" -- bash -c 'trafficgen passwd --file /root/.tg-pw && rm -f /root/.tg-pw'
+pct exec "$CTID" -- /usr/bin/python3 /opt/trafficgen/trafficgen.py passwd --file /root/.tg-pw
+pct exec "$CTID" -- /bin/rm -f /root/.tg-pw
 
 pct exec "$CTID" -- bash -c "printf 'mgmt_interface: eth0\n' > /etc/trafficgen/config.yaml"
 
