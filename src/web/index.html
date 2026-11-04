@@ -4,68 +4,80 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Traffic-Gen</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%225%22 fill=%22%23da291c%22/%3E%3Cpath d=%22M3 12h4l3-8 4 16 3-8h4%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%222.2%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f4f6f9;--card:#fff;--ink:#16202e;--mute:#6b7788;--line:#e3e8ef;--acc:#0b72e7;--acc2:#0a5cc0;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--chip:#eef2f7;--shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08)}
-@media (prefers-color-scheme:dark){:root{--bg:#0e141c;--card:#161e29;--ink:#e6ebf2;--mute:#93a0b3;--line:#263143;--acc:#4c9bff;--acc2:#78b3ff;--chip:#202b3a;--shadow:none}}
-*{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
-.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
-nav{background:var(--card);border-right:1px solid var(--line);padding:20px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
-.brand{font-weight:700;font-size:17px;padding:4px 10px 18px;display:flex;align-items:center;gap:8px}
-.brand i{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--acc),#7c3aed);display:inline-block}
-nav a{display:block;padding:9px 12px;border-radius:8px;color:var(--ink);text-decoration:none;cursor:pointer;font-weight:500}
-nav a:hover{background:var(--chip)}nav a.on{background:var(--acc);color:#fff}
-nav .sp{flex:1}
-main{padding:28px 32px;max-width:1200px;width:100%}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:0 0 12px}.sub{color:var(--mute);margin:0 0 22px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);margin-bottom:18px}
+/* Look & feel gelijk aan fs-manager: vlak, één thema, brand-rood, pill-knoppen, hairline-kaarten */
+:root{--bg:#f4f4f5;--card:#fff;--ink:#0f1012;--mute:#6a6e76;--line:#e3e3e6;--acc:#da291c;--acc2:#b21f14;--ok:#16a34a;--warn:#d97706;--bad:#da291c;--chip:#f0f0f2;--shadow:none}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column}
+h1,h2,h3{letter-spacing:-.015em}
+.topbar{background:var(--ink);color:rgba(255,255,255,.6);font-size:11px;letter-spacing:.02em}
+.topbar div{max-width:1152px;margin:0 auto;padding:6px 24px;text-align:right}
+.app{flex:1;display:flex;flex-direction:column}
+nav{background:var(--card);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:4px 4px;padding:12px max(24px,calc((100% - 1152px)/2 + 24px))}
+.brand{font-weight:700;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px;margin-right:auto}
+.brand i{width:24px;height:24px;border-radius:5px;background:var(--acc);display:inline-grid;place-items:center}.brand svg{width:16px;height:16px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+nav a{padding:6px 12px;border-radius:999px;color:var(--mute);text-decoration:none;cursor:pointer;font-weight:500;font-size:13px;transition:background-color .15s,color .15s}
+nav a:hover{background:rgba(0,0,0,.04);color:var(--ink)}nav a.on{background:var(--acc);color:#fff}
+nav .sp{display:none}nav .st{margin-left:8px}
+main{padding:40px 24px;max-width:1152px;width:100%;margin:0 auto;flex:1}
+footer{border-top:1px solid var(--line);padding:14px 24px;font-size:12px;color:var(--mute)}footer div{max-width:1152px;margin:0 auto;display:flex;justify-content:space-between}
+h1{font-size:24px;font-weight:700;margin:0 0 2px}h2{font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);margin:0 0 14px}.sub{color:var(--mute);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
 .row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}.grid{display:grid;gap:14px}
-.kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:18px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
-.kpi b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.kpi span{color:var(--mute);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-label.f{display:block;font-size:12px;color:var(--mute);margin-bottom:5px;font-weight:600}
-input,select{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
-input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--acc) 40%,transparent);border-color:var(--acc)}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.kpi b{display:block;font-size:24px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}.kpi span{color:var(--mute);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.09em}
+label.f{display:block;font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);margin-bottom:6px}
+input,select{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
-.chip{padding:7px 13px;border-radius:999px;background:var(--chip);cursor:pointer;border:1px solid transparent;font-weight:500;user-select:none}
-.chip.on{background:var(--acc);color:#fff}
-button{font:inherit;font-weight:600;border:0;border-radius:9px;padding:10px 18px;cursor:pointer;background:var(--acc);color:#fff}
-button:hover{background:var(--acc2)}button.sec{background:var(--chip);color:var(--ink)}button.sec:hover{background:var(--line)}
-button.danger{background:var(--bad)}button.big{padding:13px 28px;font-size:15px}button:disabled{opacity:.5;cursor:not-allowed}
-.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:999px;background:var(--chip);font-weight:600;font-size:12px}
+.chip{padding:6px 14px;border-radius:999px;background:#fff;cursor:pointer;border:1px solid var(--line);font-weight:500;font-size:13px;user-select:none;transition:border-color .15s,color .15s}
+.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+button{font:inherit;font-size:13px;font-weight:600;line-height:1;border:1px solid var(--acc);border-radius:999px;padding:10px 18px;cursor:pointer;background:var(--acc);color:#fff;transition:background-color .15s,border-color .15s,color .15s}
+button:hover:not(:disabled){background:var(--acc2);border-color:var(--acc2)}
+button.sec{background:#fff;color:var(--ink);border-color:var(--line)}button.sec:hover:not(:disabled){background:#fff;border-color:var(--acc);color:var(--acc)}
+button.danger{background:var(--bad);border-color:var(--bad)}button.big{padding:12px 26px;font-size:14px}button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:999px;background:var(--chip);font-weight:600;font-size:12px;color:var(--ink)}
 .pill::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mute)}.pill.run::before{background:var(--ok);animation:p 1.2s infinite}
 @keyframes p{50%{opacity:.3}}
-.bar{height:10px;background:var(--chip);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc);border-radius:6px;transition:width .5s}
-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th{text-align:left;color:var(--mute);font-size:12px;font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
-td{padding:7px 8px;border-bottom:1px solid var(--line)}td.n,th.n{text-align:right}tr:last-child td{border-bottom:0}
+.bar{height:8px;background:var(--chip);border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc);border-radius:999px;transition:width .5s}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th{text-align:left;color:var(--mute);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;padding:8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line)}td.n,th.n{text-align:right}tr:last-child td{border-bottom:0}
 .mini{display:inline-block;height:6px;background:var(--acc);border-radius:3px;vertical-align:middle;min-width:2px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mute{color:var(--mute)}
 canvas{width:100%;height:190px;display:block}
-.net{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.net{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--card)}
 .net .grid{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
-.msg{padding:10px 14px;border-radius:9px;margin-bottom:14px;background:var(--chip);white-space:pre-line}.msg.err{background:color-mix(in srgb,var(--bad) 14%,var(--card));color:var(--bad)}.msg.good{background:color-mix(in srgb,var(--ok) 14%,var(--card))}
+.msg{padding:10px 14px;border-radius:8px;margin-bottom:14px;background:#fff;border:1px solid var(--line);white-space:pre-line;font-size:13px}.msg.err{background:#fef2f2;border-color:#fecaca;color:#991b1b}.msg.good{background:#f0fdf4;border-color:#bbf7d0;color:#166534}
 .grp{border-bottom:1px solid var(--line);padding:10px 0}.grp:last-child{border:0}
 .grp summary{cursor:pointer;display:grid;grid-template-columns:130px 1fr 44px;gap:14px;align-items:center;list-style:none}
 .grp summary::-webkit-details-marker{display:none}
 .apps{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 0 4px 0}.apps label{display:flex;gap:6px;align-items:center;cursor:pointer}.apps input{width:auto}
-input[type=range]{padding:0;accent-color:var(--acc)}
+input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-color:var(--acc)}
 #login{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:9}
 #login .card{width:340px}
 .hide{display:none!important}
-.log{font:12px ui-monospace,Menlo,monospace;max-height:260px;overflow:auto}.log div{padding:2px 0;white-space:nowrap}
-@media(max-width:800px){.app{grid-template-columns:1fr}nav{position:static;height:auto;flex-direction:row;flex-wrap:wrap}main{padding:18px}}
+.log{font:12px "Geist Mono",ui-monospace,Menlo,monospace;max-height:260px;overflow:auto}.log div{padding:2px 0;white-space:nowrap}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(120,130,150,.4);border-radius:6px}
+@media(max-width:800px){main{padding:24px 16px}nav{padding:10px 16px}}
 </style>
 </head>
 <body>
-<div id="login"><div class="card"><div class="brand"><i></i>Traffic-Gen</div>
+<div class="topbar"><div id="who">Traffic-Gen</div></div>
+<div id="login"><div class="card"><div class="brand"><i><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></i>Traffic-Gen</div>
 <div id="lerr" class="msg err hide"></div>
 <label class="f">Wachtwoord</label><input id="lpw" type="password" autofocus>
 <div style="height:14px"></div><button id="lbtn" style="width:100%">Inloggen</button></div></div>
 
 <div class="app hide" id="app">
 <nav>
- <div class="brand"><i></i>Traffic-Gen</div>
+ <div class="brand"><i><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></i>Traffic-Gen</div>
  <a data-p="dash" class="on">Dashboard</a><a data-p="mix">Verkeersmix</a><a data-p="net">Netwerk</a><a data-p="set">Instellingen</a>
- <div class="sp"></div><div style="padding:8px 12px"><span class="pill" id="pill">Inactief</span></div>
+ <span class="pill st" id="pill">Inactief</span>
 </nav>
 <main>
 <section id="p-dash">
@@ -85,7 +97,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}
  </div>
  <div class="grid kpis" id="kpis"></div>
  <div class="card needrun hide"><h2>Doorvoer en requests</h2><canvas id="chart"></canvas>
-   <div class="row mute" style="margin-top:6px"><span><span class="mini" style="width:14px"></span> Mbit/s</span><span><span class="mini" style="width:14px;background:#7c3aed"></span> requests/s</span></div></div>
+   <div class="row mute" style="margin-top:6px"><span><span class="mini" style="width:14px"></span> Mbit/s</span><span><span class="mini" style="width:14px;background:#0f1012"></span> requests/s</span></div></div>
  <div class="card needrun hide"><h2>Per applicatie</h2><table id="appt"></table></div>
  <div class="card needrun hide"><h2>Per bron-IP</h2><table id="srct"></table></div>
  <div class="card needrun hide"><h2>Laatste requests</h2><div class="log" id="log"></div></div>
@@ -125,7 +137,9 @@ input[type=range]{padding:0;accent-color:var(--acc)}
   <button id="pwsave">Wijzigen</button></div></div>
  <button class="sec" id="logout">Uitloggen</button> <span class="mute" id="ver" style="margin-left:12px"></span>
 </section>
-</main></div>
+</main>
+<footer><div><span>Traffic-Gen &middot; FortiGate verkeersgenerator</span><span id="ver2"></span></div></footer>
+</div>
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -202,7 +216,7 @@ function drawChart(ser){
  const draw=(d,col,fill)=>{const mx=Math.max(...d,1e-6)*1.15,x=i=>40+(w-46)*i/(d.length-1),y=v=>10+(h-30)*(1-v/mx);
   g.beginPath();d.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
   if(fill){g.lineTo(x(d.length-1),h-20);g.lineTo(x(0),h-20);g.closePath();g.globalAlpha=.12;g.fillStyle=col;g.fill();g.globalAlpha=1}return mx};
- const m1=draw(A,acc,true);draw(B,"#7c3aed",false);g.fillStyle=mute;g.fillText(m1.toFixed(1)+" Mbit/s",2,16);g.fillText("0",28,h-17);
+ const m1=draw(A,acc,true);draw(B,"#0f1012",false);g.fillStyle=mute;g.fillText(m1.toFixed(1)+" Mbit/s",2,16);g.fillText("0",28,h-17);
  g.fillText("−"+mmss(ser[ser.length-1][0]-ser[0][0]),40,h-4)}
 
 // ---- mix
@@ -243,7 +257,7 @@ $("#napply").onclick=async()=>{try{const r=await api("network/apply",{networks:n
 $("#ntest").onclick=async()=>{flash("#nmsg","Testen…","");try{const r=await api("network/test",{});flash("#nmsg",r.map(x=>`${x.name}: gateway ${x.gateway_ping?"✔":"✘ geen ping"} · DNS ${x.dns?"✔":"✘ "+x.detail}`).join("\n")||"Geen netwerken.","")}catch(e){flash("#nmsg",e.message,"err")}};
 
 // ---- settings
-async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#iocconn").checked=c.ioc_connect;$("#iocfeed").checked=c.ioc_feeds;$("#blockips").value=(c.block_ips||[]).join(", ");$("#ver").textContent="Traffic-Gen "+(last.version||"")}
+async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#iocconn").checked=c.ioc_connect;$("#iocfeed").checked=c.ioc_feeds;$("#blockips").value=(c.block_ips||[]).join(", ");$("#ver").textContent="Traffic-Gen "+(last.version||"");$("#ver2").textContent="v"+(last.version||"");$("#who").textContent="Traffic-Gen · beheer"}
 $("#tlssave").onclick=async()=>{try{await api("config",{tls_verify:$("#tlsv").checked});flash("#smsg","Opgeslagen.","good")}catch(e){flash("#smsg",e.message,"err")}};
 $("#iocsave").onclick=async()=>{try{await api("config",{ioc_connect:$("#iocconn").checked,ioc_feeds:$("#iocfeed").checked,block_ips:$("#blockips").value.split(",").map(x=>x.trim()).filter(Boolean)});flash("#smsg","Opgeslagen.","good")}catch(e){flash("#smsg","Ongeldige invoer: "+e.message,"err")}};
 $("#pwsave").onclick=async()=>{try{await api("password",{current:$("#pw0").value,new:$("#pw1").value});$("#pw0").value=$("#pw1").value="";flash("#smsg","Wachtwoord gewijzigd.","good")}catch(e){flash("#smsg",e.message,"err")}};
