@@ -227,6 +227,8 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             return self._send(200, open(os.path.join(WEBDIR, "index.html"), "rb").read(), "text/html; charset=utf-8")
+        if u.path in ("/favicon.svg", "/favicon.ico"):
+            return self._send(200, open(os.path.join(WEBDIR, "favicon.svg"), "rb").read(), "image/svg+xml")
         if not u.path.startswith("/api/"):
             return self._send(404, {"error": "not found"})
         if u.path == "/api/session":

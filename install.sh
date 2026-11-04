@@ -139,7 +139,9 @@ pct exec "$CTID" -- mkdir -p /opt/trafficgen/web /etc/trafficgen/tls /var/log/tr
 for f in trafficgen.py netconf.py webui.py profiles.yaml; do
   pct push "$CTID" "$HERE/src/$f" "/opt/trafficgen/$f" --perms 644
 done
-pct push "$CTID" "$HERE/src/web/index.html" /opt/trafficgen/web/index.html --perms 644
+for f in index.html favicon.svg; do
+  pct push "$CTID" "$HERE/src/web/$f" "/opt/trafficgen/web/$f" --perms 644
+done
 pct exec "$CTID" -- chmod 755 /opt/trafficgen/trafficgen.py
 pct exec "$CTID" -- ln -sf /opt/trafficgen/trafficgen.py /usr/local/bin/trafficgen
 

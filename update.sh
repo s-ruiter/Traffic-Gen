@@ -34,7 +34,9 @@ main() {
     pct push "$CTID" "$TMP/src/$f" "/opt/trafficgen/$f" --perms 644
   done
   pct exec "$CTID" -- mkdir -p /opt/trafficgen/web
-  pct push "$CTID" "$TMP/src/web/index.html" /opt/trafficgen/web/index.html --perms 644
+  for f in index.html favicon.svg; do
+    pct push "$CTID" "$TMP/src/web/$f" "/opt/trafficgen/web/$f" --perms 644
+  done
   pct exec "$CTID" -- chmod 755 /opt/trafficgen/trafficgen.py
 
   echo ">> Restarting service (a running test will be stopped)"
