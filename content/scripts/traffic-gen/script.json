@@ -3,7 +3,7 @@
   "tagline": "Realistic multi-source user traffic, security-efficacy tests and bandwidth/packet-loss testing for FortiGate.",
   "description": [
     "Traffic-Gen is a Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, OS updates, SD-WAN probes and more) from multiple source IPs and networks. Use it to monitor and demo FortiGate SD-WAN, Application Control and Web Filter with traffic that looks like a real network.",
-    "It also tests security efficacy: harmless EICAR/WICAR files check antivirus and IPS, while DGA, DNS-tunnelling, dynamic DNS and mining-pool lookups check botnet and DNS filtering. The dashboard reports blocked, missed and a malware detection rate. The test duration, intensity and traffic mix are all configurable in the GUI. A built-in throughput tester sends UDP, TCP and RFC 2544 streams and TCP connections-per-second tests through the firewall to a receiver on a second network, and measures bandwidth, packet loss, jitter and latency."
+    "It also tests security efficacy: harmless EICAR/WICAR files check antivirus and IPS, while DGA, DNS-tunnelling, dynamic DNS and mining-pool lookups check botnet and DNS filtering. The dashboard reports blocked, missed and a malware detection rate. The test duration, intensity and traffic mix are all configurable in the GUI. A built-in throughput tester sends UDP, TCP and RFC 2544 streams TCP connections-per-second tests and maximum concurrent session tests through the firewall to a receiver on a second network, and measures bandwidth, packet loss, jitter and latency."
   ],
   "category": "tool",
   "platform": "proxmox",
@@ -16,6 +16,7 @@
   "tags": [
     "antivirus",
     "application-control",
+    "concurrent-sessions",
     "cps",
     "ioc",
     "lxc",
@@ -72,7 +73,7 @@
     "Go to Traffic mix and choose which groups and apps to run. The Web filter, Malware and IOC groups are off by default.",
     "On Traffic mix pick a duration and intensity, then click Start test.",
     "Compare the dashboard and /var/log/trafficgen/requests.log with the FortiGate logs for application control, web filter, antivirus and botnet events.",
-    "For bandwidth and packet-loss tests open Throughput, choose the sender network, pick the receiver interface (eth2) and set its IP and gateway in a different network, run Check environment and start a UDP, TCP, RFC 2544 or connections-per-second test."
+    "For bandwidth and packet-loss tests open Throughput, choose the sender network, pick the receiver interface (eth2) and set its IP and gateway in a different network, run Check environment and start a UDP, TCP, RFC 2544, connections-per-second or concurrent-sessions test."
   ],
   "screenshots": [
     {

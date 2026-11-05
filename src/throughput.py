@@ -12,6 +12,7 @@ import array
 import collections
 import ctypes
 import errno
+import ipaddress
 import json
 import math
 import multiprocessing as mp
@@ -42,6 +43,21 @@ STREAM_CAP = max(1, min(MAX_STREAMS, CPUS // 2))     # one stream = one sender +
 
 def mono():
     return time.monotonic_ns()
+
+
+def port_range():
+    try:
+        with open("/proc/sys/net/ipv4/ip_local_port_range") as f:
+            lo, hi = f.read().split()
+            return int(lo), int(hi)
+    except (OSError, ValueError):
+        return 32768, 60999
+
+
+def tuple_capacity(src_ips, dst_ips, ports=MAX_STREAMS):
+    """Rough number of concurrent TCP sessions possible: one source port per (src IP, dst IP, dst port)."""
+    lo, hi = port_range()
+    return int(src_ips) * int(dst_ips) * int(ports) * (hi - lo + 1)
 
 
 # ------------------------------------------------------------ plumbing helpers
@@ -119,11 +135,15 @@ class RxNet:
             run(["ip", "link", "set", RX_DEV, "netns", str(self.pid)])
             ns = ["nsenter", "-t", str(self.pid), "-n"]
             run(ns + ["ip", "link", "set", "lo", "up"])
-            run(ns + ["ip", "addr", "add", "%s/%d" % (rx["ip"], int(rx["prefix"])), "dev", RX_DEV])
+            first = ipaddress.IPv4Address(rx["ip"])
+            ips = [str(first + i) for i in range(max(1, int(rx.get("count") or 1)))]
+            for ip in ips:
+                run(ns + ["ip", "addr", "add", "%s/%d" % (ip, int(rx["prefix"])), "dev", RX_DEV])
             run(ns + ["ip", "link", "set", RX_DEV, "up"])
             if rx.get("gateway"):
                 run(ns + ["ip", "route", "add", "default", "via", rx["gateway"]])
-            run(ns + ["arping", "-U", "-c", "1", "-I", RX_DEV, rx["ip"]], check=False)
+            for ip in ips:
+                run(ns + ["arping", "-U", "-c", "1", "-I", RX_DEV, ip], check=False)
         except Exception:
             self.down()
             raise
@@ -368,6 +388,11 @@ def _tcp_rx(conn, ns_pid, bind_ip, ports):
             if mode:
                 byt += n
                 sec()[1] += n
+            if mode == "conc":
+                try:
+                    c.send(b"h")
+                except OSError:
+                    pass
             if mode == "cps" and resp and not st[0]:
                 st[0] = 1
                 try:
@@ -511,6 +536,177 @@ def _cps_tx(conn, src, dst, ports, rate, dur, req, resp, hold_ms, rst, tmo):
     conn.send(("done", {"counts": dict(c), "lat": lat}))
 
 
+# ------------------------------------------------------------ concurrent sessions sender
+def _conc_tx(conn, srcs, dsts, ports, rate, target, hold_s, hb_s, fail_pct, tmo):
+    """Open up to `target` TCP connections at `rate`/s, keep them open for `hold_s` with a heartbeat, count drops."""
+    _worker_init()
+    sel = selectors.DefaultSelector()
+    clock = time.monotonic
+    start = clock()
+    c = collections.Counter()
+    lats = array.array("d")
+    live = {}
+    pending = collections.deque()          # connections still in the handshake (oldest first)
+    hbq = collections.deque()              # established connections, round-robin for the heartbeat
+    lin = struct.pack("ii", 1, 0)
+    ns, nd, npt = len(srcs), len(dsts), len(ports)
+    idx, alive, peak = 0, 0, 0
+    ramping, ramp_end, reason, first_fail_alive = True, None, "", None
+    win = collections.deque()
+    nxt_tick, last_hb = start + 1, start
+
+    def close(ent, rst=True):
+        s = ent[0]
+        ent[2] = "closed"
+        live.pop(s.fileno(), None)
+        try:
+            sel.unregister(s)
+        except (KeyError, ValueError):
+            pass
+        if rst:
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, lin)
+            except OSError:
+                pass
+        s.close()
+
+    def lost(ent):
+        nonlocal alive
+        if ent[2] == "up":
+            alive -= 1
+            c["dropped"] += 1
+        close(ent)
+
+    def failed(ent, why):
+        nonlocal first_fail_alive
+        c["fail"] += 1
+        c[why] += 1
+        if first_fail_alive is None:
+            first_fail_alive = alive
+        close(ent)
+
+    while True:
+        now = clock()
+        # ---- ramp up
+        if ramping:
+            if c["est"] >= target:
+                ramping, ramp_end, reason = False, now, "target"
+            else:
+                due = int((now - start) * rate) + 1
+                for _ in range(max(0, min(due - c["att"], 300, target - c["est"] - len(pending) + 0))):
+                    i = idx
+                    idx += 1
+                    src, dst = srcs[i % ns], dsts[(i // ns) % nd]
+                    port = ports[(i // (ns * nd)) % npt]
+                    c["att"] += 1
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    except OSError:                                  # out of file descriptors
+                        c["fail"] += 1
+                        c["error"] += 1
+                        if first_fail_alive is None:
+                            first_fail_alive = alive
+                        break
+                    s.setblocking(False)
+                    try:
+                        s.setsockopt(socket.IPPROTO_IP, 24, 1)       # IP_BIND_ADDRESS_NO_PORT
+                    except OSError:
+                        pass
+                    try:
+                        s.bind((src, 0))
+                        e = s.connect_ex((dst, port))
+                    except OSError as ex:
+                        e = ex.errno or errno.EADDRNOTAVAIL
+                    if e not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
+                        c["fail"] += 1
+                        c["error"] += 1
+                        if first_fail_alive is None:
+                            first_fail_alive = alive
+                        s.close()
+                        continue
+                    ent = [s, now, "conn", 0.0, now]
+                    live[s.fileno()] = ent
+                    pending.append(ent)
+                    sel.register(s, selectors.EVENT_WRITE, ent)
+        elif ramp_end is not None and now - ramp_end >= hold_s:
+            break
+        # ---- socket events
+        for key, ev in sel.select(0.002):
+            ent = key.data
+            s = ent[0]
+            if ent[2] == "conn":
+                e = s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if e:
+                    failed(ent, {errno.ECONNREFUSED: "refused", errno.ETIMEDOUT: "timeout", errno.ECONNRESET: "reset"}.get(e, "error"))
+                    continue
+                c["est"] += 1
+                alive += 1
+                peak = max(peak, alive)
+                lats.append(clock() - ent[1])
+                ent[2] = "up"
+                sel.modify(s, selectors.EVENT_READ, ent)
+                hbq.append(ent)
+            elif ent[2] == "up":
+                try:
+                    d = s.recv(64)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    d = b""
+                if d:
+                    ent[3] = 0.0                    # heartbeat answered
+                else:
+                    lost(ent)
+        # ---- handshake time-outs (oldest first)
+        while pending and (pending[0][2] != "conn" or now - pending[0][1] > tmo):
+            ent = pending.popleft()
+            if ent[2] == "conn":
+                failed(ent, "timeout")
+        # ---- heartbeat: every connection once per hb_s
+        if hb_s > 0 and hbq and now - last_hb >= 0.05:
+            k = min(len(hbq), int(len(hbq) * (now - last_hb) / hb_s) + 1)
+            last_hb = now
+            for _ in range(k):
+                ent = hbq.popleft()
+                if ent[2] != "up":
+                    continue
+                if ent[3] and now - ent[3] > 10:
+                    lost(ent)
+                    continue
+                try:
+                    ent[0].send(b"h")
+                    if not ent[3]:
+                        ent[3] = now
+                except OSError:
+                    lost(ent)
+                    continue
+                hbq.append(ent)
+        elif hbq and len(hbq) > 2 * max(alive, 1):
+            hbq = collections.deque(e for e in hbq if e[2] == "up")
+        # ---- once a second: tick, failure window, stop message
+        if now >= nxt_tick:
+            nxt_tick += 1
+            conn.send(("tick", c["att"], c["est"], c["fail"], alive, c["dropped"], 1 if ramping else 0))
+            win.append((now, c["att"], c["fail"]))
+            while win and now - win[0][0] > 3.5:
+                win.popleft()
+            if ramping and len(win) >= 2:
+                da, df = win[-1][1] - win[0][1], win[-1][2] - win[0][2]
+                if da >= 50 and df * 100.0 / da > fail_pct:
+                    ramping, ramp_end, reason = False, now, "failures"
+            if conn.poll() and conn.recv() == "stop":
+                reason = reason or "stopped"
+                break
+    final_alive = alive
+    for ent in list(live.values()):
+        close(ent)
+    lat = lats.tolist()
+    if len(lat) > 50000:
+        lat = lat[::len(lat) // 50000 + 1]
+    conn.send(("done", {"counts": dict(c), "lat": lat, "peak": peak, "final": final_alive, "reason": reason or "target",
+                        "first_fail_alive": first_fail_alive, "ramp_s": round((ramp_end or clock()) - start, 1)}))
+
+
 # ------------------------------------------------------------ orchestration
 def pct(vals, p):
     if not vals:
@@ -531,6 +727,11 @@ class Ctx:
         self.loopback = p["rx"].get("mode") == "loopback"
         self.src = "127.0.0.1" if self.loopback else p["tx_ip"]
         self.dst = "127.0.0.1" if self.loopback else p["rx"]["ip"]
+        cnt = max(1, int(p["rx"].get("count") or 1))
+        if self.loopback:
+            self.dsts = ["127.0.0.%d" % (1 + i) for i in range(cnt)]
+        else:
+            self.dsts = [str(ipaddress.IPv4Address(p["rx"]["ip"]) + i) for i in range(cnt)]
         self.base = int(p.get("base_port", 5201))
         self.net = None
         self.udp, self.tcp = [], None
@@ -570,7 +771,7 @@ class Ctx:
     def tcp_rx(self):
         if not self.tcp:
             ports = [self.base + i for i in range(MAX_STREAMS)]
-            self.tcp = self._spawn_rx(_tcp_rx, (self.ns_pid, self.dst, ports))
+            self.tcp = self._spawn_rx(_tcp_rx, (self.ns_pid, "0.0.0.0", ports))
         return self.tcp
 
     @staticmethod
@@ -906,6 +1107,86 @@ def cps_trial(ctx, rate, dur, req, resp, hold_ms, rst, series=None):
             "limited": att < 0.95 * rate * dur}
 
 
+def conc_trial(ctx, p, series=None):
+    srcs = p.get("tx_ips") or [ctx.src]
+    dsts = ctx.dsts
+    target, rate = int(p["target"]), float(p["rate"])
+    hold, hb, failp = float(p["hold_s"]), float(p["heartbeat_s"]), float(p["fail_pct"])
+    nw = max(1, min(CPUS, int(math.ceil(rate / 3000.0)), 8, target))
+    _pr, rconn = ctx.tcp_rx()
+    ctx.ask(rconn, ("arm", {"mode": "conc"}))
+    ports = [ctx.base + i for i in range(MAX_STREAMS)]
+    shares = [target // nw + (1 if i < target % nw else 0) for i in range(nw)]
+    pipes, procs = [], []
+    for i in range(nw):
+        a, b = CTX.Pipe()
+        # every worker walks the full address/port space, offset so that workers do not collide on the same combinations
+        pr = CTX.Process(target=_conc_tx, args=(b, srcs[i % len(srcs):] + srcs[:i % len(srcs)], dsts, ports, rate / nw, shares[i], hold, hb, failp, 3.0), daemon=True)
+        pr.start()
+        pipes.append(a)
+        procs.append(pr)
+    cum = [(0, 0, 0, 0, 0, 1)] * nw
+    done = [None] * nw
+    sec_i, rx_peak = 0, 0
+    try:
+        while any(d is None for d in done):
+            if ctx.stop.is_set():
+                for a in pipes:
+                    try:
+                        a.send("stop")
+                    except OSError:
+                        pass
+                raise Stopped()
+            time.sleep(1.0)
+            for i, a in enumerate(pipes):
+                msgs, eof = _drain(a)
+                for m in msgs:
+                    if m[0] == "tick":
+                        cum[i] = m[1:]
+                    elif m[0] == "done":
+                        done[i] = m[1]
+                if eof and done[i] is None:
+                    done[i] = {"counts": {}, "lat": [], "peak": 0, "final": 0, "reason": "error", "first_fail_alive": None, "ramp_s": 0}
+            alive = sum(x[3] for x in cum)
+            ramping = any(x[5] for x in cum)
+            snap = ctx.ask(rconn, ("snap",)) or {}
+            rx_open = snap.get("active", 0)
+            rx_peak = max(rx_peak, rx_open)
+            sec_i += 1
+            ctx.progress["phase"] = ("ramping up: %s of %s sessions open" if ramping else "holding: %s of %s sessions open") % (n_fmt(alive), n_fmt(target))
+            if series is not None and any(d is None for d in done):
+                series.append([sec_i, alive, rx_open, sum(x[2] for x in cum)])
+        time.sleep(0.3)
+        fin = ctx.ask(rconn, ("collect",))
+    finally:
+        for pr in procs:
+            if pr.is_alive():
+                pr.terminate()
+    tot = collections.Counter()
+    lat = []
+    for d in done:
+        tot.update(d["counts"])
+        lat += d["lat"]
+    peak = sum(d["peak"] for d in done)
+    final = sum(d["final"] for d in done)
+    reasons = {d["reason"] for d in done}
+    ff = [d["first_fail_alive"] for d in done if d["first_fail_alive"] is not None]
+    dropped = tot["dropped"]
+    reason = "target reached" if reasons <= {"target"} else ("failures began" if "failures" in reasons else "stopped" if "stopped" in reasons else "error")
+    return {"target": target, "peak_sessions": peak, "final_sessions": final, "rx_peak": max(rx_peak, fin.get("max_active", 0)),
+            "attempted": tot["att"], "established": tot["est"], "failed": tot["fail"], "dropped": dropped,
+            "fail_pct": round(tot["fail"] * 100.0 / tot["att"], 3) if tot["att"] else 0.0,
+            "timeout": tot["timeout"], "refused": tot["refused"], "reset": tot["reset"], "error": tot["error"],
+            "reason": reason, "limit_at": sum(ff) if ff else None, "ramp_s": max(d["ramp_s"] for d in done),
+            "lat_p50_ms": round(pct(lat, 50) * 1000, 3), "lat_p95_ms": round(pct(lat, 95) * 1000, 3), "lat_max_ms": round(max(lat or [0]) * 1000, 3),
+            "workers": nw, "src_ips": len(srcs), "dst_ips": len(dsts), "hold_s": hold, "heartbeat_s": hb,
+            "ok": reason == "target reached" and dropped == 0 and peak >= 0.99 * target}
+
+
+def n_fmt(v):
+    return "{:,}".format(int(v))
+
+
 # ------------------------------------------------------------ RFC 2544
 def line_pps(size, link_mbps):
     return link_mbps * 1e6 / (8.0 * (size + 20))
@@ -1010,6 +1291,29 @@ def plan_warnings(kind, p):
         if avail and est > 0.5 * avail:
             w.append("Holding about %d connections open needs roughly %d MB of memory (both ends run in this LXC) and only %d MB is available. "
                      "Give the LXC more memory or lower the rate or hold time." % (conc, est, avail))
+    elif kind == "concurrent":
+        target = int(p["target"])
+        src_n = len(p.get("tx_ips") or [1])
+        dst_n = int((p.get("rx") or {}).get("count") or 1)
+        cap = tuple_capacity(src_n, dst_n)
+        if target > 50000 and (src_n < 2 or dst_n < 2):
+            w.append("More than 50,000 concurrent sessions with %d source IP%s and %d receiver IP%s: all sessions share very few address pairs. This can run out of source ports "
+                     "(about %d per source IP, destination IP and port) and concentrates the load on a few flows, which is not how a real network looks. "
+                     "Use 2 or more source IPs ('Source IPs to use') and 2 or more receiver IPs ('Number of receiver IPs' on the Path card)."
+                     % (src_n, "" if src_n == 1 else "s", dst_n, "" if dst_n == 1 else "s", port_range()[1] - port_range()[0] + 1))
+        elif target > 0.5 * cap:
+            w.append("The target is more than half of the roughly %s sessions that the address and port space allows (%d source IP(s) x %d receiver IP(s) x %d ports). Add source or receiver IPs for headroom." % (n_fmt(cap), src_n, dst_n, MAX_STREAMS))
+        if target > 20000:
+            w.append("%s sessions held open can fill the FortiGate session table (conserve mode) and affect everyone behind that firewall. Only run this on a firewall you may load like this." % n_fmt(target))
+        avail = mem_available_mb()
+        est = target * 6 / 1024.0
+        if avail and est > 0.5 * avail:
+            w.append("Holding %s sessions needs roughly %d MB of memory (both ends run in this LXC) and only %d MB is available. Give the LXC more memory or lower the target." % (n_fmt(target), est, avail))
+        mins = target / float(max(p["rate"], 1)) / 60.0
+        if mins > 10:
+            w.append("Ramping up to %s sessions at %s per second takes about %d minutes. Increase the open rate for a shorter test." % (n_fmt(target), n_fmt(p["rate"]), mins))
+        if CPUS <= 2 and p["rate"] > 3000:
+            w.append("An open rate above 3,000 per second keeps this LXC (%d CPU cores) very busy." % CPUS)
     elif kind == "rfc2544":
         small = [x for x in p["sizes"] if x < 256]
         if small and float(p["link_mbps"]) >= 500:
@@ -1130,6 +1434,9 @@ class Runner:
                     st["rows"].append(r)
                     st["log"].append("%d conn/s: established %d/%d, %.1f%% failed" % (rate, r["established"], r["attempted"], r["fail_pct"]))
                 st["result"] = {"max_ok_cps": max([r["target_cps"] for r in st["rows"] if r["ok"]] or [0])}
+            elif kind == "concurrent":
+                st["phase"], st["steps"] = "concurrent sessions", 1
+                st["result"] = conc_trial(ctx, p, st["series"])
             elif kind == "rfc2544":
                 st["result"] = rfc2544(ctx, p, st)
         except Stopped:

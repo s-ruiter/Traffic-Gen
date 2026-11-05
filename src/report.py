@@ -261,11 +261,12 @@ def n(v):
     return "-" if v is None else "{:,}".format(int(v)).replace(",", " ")
 
 
-KIND = {"udp": "UDP stream", "tcp": "TCP throughput", "rfc2544": "RFC 2544", "cps": "Connections per second"}
+KIND = {"udp": "UDP stream", "tcp": "TCP throughput", "rfc2544": "RFC 2544", "cps": "Connections per second", "concurrent": "Concurrent sessions"}
 PLABEL = {"payload": "Payload (bytes)", "rate_mbps": "Rate (Mbit/s)", "streams": "Streams", "duration": "Duration (s)", "sizes": "Frame sizes (bytes)",
           "link_mbps": "Link rate (Mbit/s)", "trial_s": "Trial length (s)", "loss_tol": "Loss tolerance (%)", "resolution": "Resolution (% of link)",
           "frame_loss": "Frame loss test", "rate": "Connections/s", "ramp": "Ramp up", "step": "Step (+conn/s)", "steps": "Steps", "req": "Request (bytes)",
-          "resp": "Response (bytes)", "hold_ms": "Hold open (ms)", "close": "Close", "max_fail_pct": "Pass if failures <= (%)"}
+          "resp": "Response (bytes)", "hold_ms": "Hold open (ms)", "close": "Close", "max_fail_pct": "Pass if failures <= (%)",
+          "target": "Target sessions", "hold_s": "Hold time (s)", "heartbeat_s": "Heartbeat (s, 0 = off)", "fail_pct": "Stop ramp at failures > (%)"}
 
 
 # ---------------------------------------------------------------- Throughput report
@@ -327,6 +328,17 @@ def tp_report(st, version):
             pdf.table(["Frame (B)", "Offered % of link", "Offered pps", "Received Mbit/s", "Loss %", "Note"],
                       [[x["size"], x["pct"], n(x["offered_pps"]), f(x["rx_mbps"], 1), f(x["loss_pct"], 3), "sender limited" if x.get("limited") else ""] for x in st["rows2"]],
                       [8, 12, 12, 12, 10, 14], ["r"] * 5 + ["l"], 7.5)
+    elif kind == "concurrent" and r:
+        pdf.h2("Result")
+        verdict = "PASS" if r.get("ok") else ("WARN" if r.get("reason") == "target reached" else "LIMIT")
+        pdf.kv([("Result", verdict, GREEN if r.get("ok") else (AMBER if verdict == "WARN" else BRAND)), ("Peak sessions", "%s / %s" % (n(r.get("peak_sessions")), n(r.get("target")))),
+                ("Open at receiver (max)", n(r.get("rx_peak"))), ("Lost during hold", n(r.get("dropped")), BRAND if r.get("dropped") else GREEN),
+                ("Failed attempts", "%s (%s %%)" % (n(r.get("failed")), f(r.get("fail_pct"), 2)), BRAND if r.get("failed") else GREEN),
+                ("Ramp stopped because", r.get("reason")),
+                ("Failures began at about", (n(r.get("limit_at")) + " sessions") if r.get("limit_at") is not None else "-"),
+                ("Ramp-up time", "%s s" % r.get("ramp_s")), ("Connect p50 / p95 / max", "%s / %s / %s ms" % (f(r.get("lat_p50_ms")), f(r.get("lat_p95_ms")), f(r.get("lat_max_ms")))),
+                ("Source IPs x receiver IPs", "%s x %s" % (r.get("src_ips"), r.get("dst_ips"))), ("Final open (sender)", n(r.get("final_sessions"))),
+                ("Timeouts", n(r.get("timeout"))), ("Refused / reset / other", "%s / %s / %s" % (r.get("refused"), r.get("reset"), r.get("error")))], 3)
     elif kind == "cps":
         pdf.h2("Connections per second")
         pdf.kv([("Highest sustained", n(r.get("max_ok_cps")) + " conn/s", GREEN if r.get("max_ok_cps") else BRAND)], 3)
@@ -340,8 +352,10 @@ def tp_report(st, version):
                   [7, 14, 7, 6, 6, 17, 9, 7, 9], ["r"] * 8 + ["l"], 7, cols)
     series = st.get("series") or []
     if series:
-        pdf.h2("Connections per second (last step)" if kind == "cps" else "Throughput over time" + (" (last trial)" if kind == "rfc2544" else ""), keep=170)
-        pdf.chart(series, "attempted" if kind == "cps" else "sent", "established" if kind == "cps" else "received", "conn/s" if kind == "cps" else "Mbit/s")
+        pdf.h2("Open sessions over time" if kind == "concurrent" else "Connections per second (last step)" if kind == "cps" else "Throughput over time" + (" (last trial)" if kind == "rfc2544" else ""), keep=170)
+        pdf.chart(series, "attempted" if kind == "cps" else ("open (sender)" if kind == "concurrent" else "sent"),
+                  "established" if kind == "cps" else ("open at receiver" if kind == "concurrent" else "received"),
+                  "conn/s" if kind == "cps" else ("" if kind == "concurrent" else "Mbit/s"))
     if st.get("log"):
         pdf.h2("Progress log")
         for ln in st["log"][-30:]:

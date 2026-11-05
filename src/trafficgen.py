@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
     "throughput": {                # bandwidth / packet-loss / CPS tester (see throughput.py)
         "tx_network": "",          # name of the source network the sender uses
         "base_port": 5201,         # UDP/TCP ports base..base+7 on the receiver
-        "rx": {"mode": "isolated", "parent": "eth1", "vlan": "", "ip": "", "prefix": 24, "gateway": ""},
+        "rx": {"mode": "isolated", "parent": "eth1", "vlan": "", "ip": "", "prefix": 24, "gateway": "", "count": 1},
     },
     "groups": {                    # relative weights of traffic groups; 0 = off
         "office365": 25, "collab": 20, "streaming": 20, "social": 10,

@@ -26,7 +26,7 @@ AUTH_FILE = os.environ.get("TRAFFICGEN_AUTH", "/etc/trafficgen/auth.json")
 CERT = "/etc/trafficgen/tls/server.crt"
 KEY = "/etc/trafficgen/tls/server.key"
 SESSION_TTL = 12 * 3600
-VERSION = "2.2"
+VERSION = "2.3"
 
 
 # ----------------------------------------------------------------- auth
@@ -198,7 +198,7 @@ def tp_validate_path(body, cfg):
     mode = rx.get("mode", "isolated")
     if mode not in ("isolated", "loopback"):
         raise ValueError("Receiver mode must be 'isolated' or 'loopback'.")
-    out["rx"] = {"mode": mode, "parent": "", "vlan": "", "ip": "", "prefix": 24, "gateway": ""}
+    out["rx"] = {"mode": mode, "parent": "", "vlan": "", "ip": "", "prefix": 24, "gateway": "", "count": 1}
     if mode == "loopback":
         return out
     parent = str(rx.get("parent", "")).strip()
@@ -221,13 +221,21 @@ def tp_validate_path(body, cfg):
         raise ValueError("Receiver address is invalid: %s" % e)
     if not 8 <= prefix <= 30:
         raise ValueError("Receiver prefix must be between 8 and 30.")
+    count = int(rx.get("count") or 1)
+    if not 1 <= count <= 250:
+        raise ValueError("The number of receiver IPs must be between 1 and 250.")
+    last = ipaddress.IPv4Address(ip) + (count - 1)
+    if last not in net:
+        raise ValueError("Receiver IPs %s to %s do not fit in %s." % (ip, last, net))
+    if gw and ipaddress.IPv4Address(ip) <= ipaddress.IPv4Address(gw) <= last:
+        raise ValueError("The receiver gateway %s is inside the receiver IP range." % gw)
     for n in cfg["networks"]:
         if net.overlaps(_net_of(n["first"], n["prefix"])):
             raise ValueError("Receiver network %s overlaps with source network '%s'; it must be a different network so traffic crosses the FortiGate." % (net, n.get("name")))
     mnet = netconf.mgmt_network(cfg["mgmt_interface"])
     if mnet and net.overlaps(mnet):
         raise ValueError("Receiver network %s overlaps with the management network." % net)
-    out["rx"].update({"parent": parent, "vlan": "", "ip": ip, "prefix": prefix, "gateway": gw})
+    out["rx"].update({"parent": parent, "vlan": "", "ip": ip, "prefix": prefix, "gateway": gw, "count": count})
     return out
 
 
@@ -267,6 +275,32 @@ def tp_params(kind, body, cfg):
             raise ValueError("Rate x hold time would keep more than 100000 connections open at once. Lower the rate or the hold time.")
         if p["req"] == 0 and p["resp"] > 0:
             raise ValueError("A response size needs a request size greater than 0.")
+    elif kind == "concurrent":
+        p.update(target=_num(body, "target", 100, 500000, 10000, int), rate=_num(body, "rate", 50, 20000, 2000),
+                 hold_s=_num(body, "hold_s", 0, 3600, 30), heartbeat_s=_num(body, "heartbeat_s", 0, 300, 30),
+                 fail_pct=_num(body, "fail_pct", 0.1, 50, 5))
+        if 0 < p["heartbeat_s"] < 5:
+            raise ValueError("The heartbeat interval must be 0 (off) or at least 5 seconds.")
+        src_n = _num(body, "src_ips", 1, 250, 1, int)
+        dst_n = int(t["rx"].get("count") or 1)
+        if t["rx"]["mode"] == "isolated":
+            net = next(x for x in cfg["networks"] if x.get("name") == t["tx_network"])
+            if src_n > int(net["count"]):
+                raise ValueError("'Source IPs to use' (%d) is more than the %d IPs of sender network '%s'." % (src_n, int(net["count"]), net["name"]))
+            ips = netconf.ips_of(net)[:src_n]
+            live = netconf.live_addrs().get(netconf.dev_of(net), set())
+            if any(i not in live for i in ips):
+                raise ValueError("Not all %d sender IPs are active. Click 'Apply' on the Network page first." % src_n)
+            p["tx_ips"] = ips
+        else:
+            src_n, dst_n = 1, 1
+            p["rx"] = dict(t["rx"], count=1)
+        cap = tp.tuple_capacity(src_n, dst_n)
+        if p["target"] > 0.9 * cap:
+            raise ValueError("%d sessions do not fit: %d source IP(s) x %d receiver IP(s) x %d ports allow about %d concurrent sessions. "
+                             "Use more source IPs or receiver IPs." % (p["target"], src_n, dst_n, tp.MAX_STREAMS, cap))
+        if p["target"] > 50000 and not body.get("confirm"):
+            raise ValueError("Confirmation required: more than 50,000 concurrent sessions can fill the FortiGate session table and affect other users.")
     elif kind == "rfc2544":
         sizes = body.get("sizes") or [64, 512, 1518]
         sizes = sorted({int(x) for x in sizes})
@@ -363,7 +397,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/tp/state":
                 return self._send(200, TP.state())
             if u.path == "/api/tp/config":
-                return self._send(200, {"throughput": cfg["throughput"], "networks": [{"name": n.get("name"), "parent": n.get("parent"), "first": n.get("first"), "gateway": n.get("gateway")} for n in cfg["networks"]],
+                return self._send(200, {"throughput": cfg["throughput"], "networks": [{"name": n.get("name"), "parent": n.get("parent"), "first": n.get("first"), "gateway": n.get("gateway"), "count": n.get("count")} for n in cfg["networks"]],
                                         "interfaces": [i["name"] for i in netconf.interfaces() if i["name"] != cfg["mgmt_interface"] and "." not in i["name"]]})
             if u.path == "/api/log":
                 e = CTRL.engine
