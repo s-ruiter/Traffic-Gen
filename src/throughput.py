@@ -872,7 +872,8 @@ class Ctx:
         raise RuntimeError(
             "The sender (%s) cannot reach the receiver (%s port %d) through the FortiGate after %d attempts in %.0f s: %s. Nothing was sent.\n"
             "Check: (1) the FortiGate policy allows TCP and UDP %d-%d from %s to %s, (2) the receiver gateway %s is the FortiGate's IP on the receiver network, "
-            "(3) the FortiGate is not in conserve mode or blocking this source after an earlier test (session table, DoS policy).\n"
+            "(3) the FortiGate is not low on memory after an earlier test: run 'diagnose hardware sysinfo conserve' (memory used + freeable must stay below the extreme threshold) and "
+            "'diagnose sys session stat' (extreme_low_mem and memory_tension_drop mean new sessions are being dropped); wait until the memory recovers, or use a lower session target.\n"
             "Diagnostics: %s"
             % (self.src, self.dsts[0], self.base, tries, time.time() - t0, last, self.base, self.base + MAX_STREAMS - 1, self.src, self.dsts[0],
                (self.p["rx"].get("gateway") or "-"), self.diagnostics()))
@@ -1403,7 +1404,9 @@ def plan_warnings(kind, p):
         elif target > 0.5 * cap:
             w.append("The target is more than half of the roughly %s sessions that the address and port space allows (%d source IP(s) x %d receiver IP(s) x %d ports). Add source or receiver IPs for headroom." % (n_fmt(cap), src_n, dst_n, MAX_STREAMS))
         if target > 20000:
-            w.append("%s sessions held open can fill the FortiGate session table (conserve mode) and affect everyone behind that firewall. Only run this on a firewall you may load like this." % n_fmt(target))
+            w.append("%s sessions held open can fill the FortiGate session table and memory (conserve mode, 'extreme low memory') and affect everyone behind that firewall. "
+                     "A small FortiGate VM (for example 2 GB RAM) may already be short of memory at a few tens of thousands of sessions: start lower and watch "
+                     "'diagnose hardware sysinfo conserve' and 'diagnose sys session stat'. Only run this on a firewall you may load like this." % n_fmt(target))
         avail = mem_available_mb()
         est = target * 6 / 1024.0
         if avail and est > 0.5 * avail:
