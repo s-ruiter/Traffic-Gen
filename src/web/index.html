@@ -125,15 +125,22 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <h1>Throughput</h1><p class="sub">Measure bandwidth, packet loss and connections per second through the FortiGate: a sender on a source network talks to a receiver on a second network.</p>
  <div id="tmsg" class="msg hide"></div>
  <div class="card"><h2>Path</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-   <div><label class="f">Sender network</label><select id="tp-tx"></select></div>
-   <div><label class="f">Receiver</label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Self-test (this LXC only, no FortiGate)</option></select></div>
-   <div class="tp-iso"><label class="f">Interface</label><select id="tp-parent"></select></div>
-   <div class="tp-iso"><label class="f">Receiver IP</label><input id="tp-ip" placeholder="10.10.30.10"></div>
-   <div class="tp-iso"><label class="f">Prefix</label><input id="tp-prefix" type="number" min="8" max="30"></div>
-   <div class="tp-iso"><label class="f">Gateway (FortiGate)</label><input id="tp-gw" placeholder="10.10.30.1"></div>
+  <p class="mute" style="margin:0 0 14px">Traffic flows from the <b>sender</b> (a source network on eth1) through the <b>FortiGate</b> to the <b>receiver</b> (the third interface, eth2). The receiver is set up here, <b>not</b> on the Network page; only the sender network is configured there.</p>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+   <div><label class="f">Mode</label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Self-test (this LXC only, no FortiGate)</option></select></div>
    <div><label class="f">Base port</label><input id="tp-port" type="number" min="1024" max="65000"></div>
   </div>
+  <div class="tp-iso" style="margin-top:18px"><b>Sender</b> <span class="mute">— uses the first IP of a source network</span>
+   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px"><div><label class="f">Sender network (from the Network page)</label><select id="tp-tx"></select></div></div>
+   <div class="mute" id="tp-sender" style="margin-top:6px"></div></div>
+  <div class="tp-iso" style="margin-top:18px"><b>Receiver</b> <span class="mute">— a virtual interface on the third NIC, only while a test runs</span>
+   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px">
+    <div><label class="f">Receiver interface (third NIC)</label><select id="tp-parent"></select></div>
+    <div><label class="f">Receiver IP (a free address)</label><input id="tp-ip" placeholder="10.10.40.10"></div>
+    <div><label class="f">Prefix</label><input id="tp-prefix" type="number" min="8" max="30"></div>
+    <div><label class="f">Receiver gateway (FortiGate IP)</label><input id="tp-gw" placeholder="10.10.40.1"></div>
+   </div>
+   <div class="mute" style="margin-top:6px">The receiver gateway is the FortiGate's own address in the receiver network (the FortiGate interface or VLAN interface connected to eth2). The sender's gateway comes from the Network page.</div></div>
   <div class="msg err hide" id="tp-warn" style="margin-top:12px"></div>
   <div class="msg hide" id="tp-selftest" style="margin-top:12px"><b>What the self-test does.</b> Sender and receiver both run inside this LXC and talk to each other over 127.0.0.1 (the loopback interface). The packets never leave the LXC: they do not reach a network interface, the Proxmox bridge or the FortiGate.
 <b>Use it to</b> check that the tool works and to see the highest rate this LXC can generate and receive (limited by its CPU cores and the Python engine). That tells you whether a limit in a real test comes from the tool or from the network.
@@ -318,15 +325,16 @@ async function loadTp(){tpCfg=await api("tp/config");const t=tpCfg.throughput,rx
  $("#tp-mode").value=rx.mode;tpParents(rx.parent);$("#tp-ip").value=rx.ip||"";$("#tp-prefix").value=rx.prefix||24;$("#tp-gw").value=rx.gateway||"";$("#tp-port").value=t.base_port;
  tpMode();tpForm();tpPoll()}
 let tpBlocked=false;
-function tpParents(sel){const txn=tpCfg.networks.find(n=>n.name===$("#tp-tx").value),cands=tpCfg.interfaces.filter(i=>!txn||i!==txn.parent);
+function tpParents(sel){tpSender();const txn=tpCfg.networks.find(n=>n.name===$("#tp-tx").value),cands=tpCfg.interfaces.filter(i=>!txn||i!==txn.parent);
  $("#tp-parent").innerHTML=cands.map(n=>`<option ${n===sel?"selected":""}>${esc(n)}</option>`).join("");
  const iso=$("#tp-mode").value==="isolated";let w="";
  if(iso&&!tpCfg.networks.length)w="No source network yet. Add and apply one on the Network page first; the sender uses it.";
- else if(iso&&!cands.length)w="No interface available for the receiver"+(txn?" besides "+txn.parent+", which the sender uses":"")+". The throughput test needs a third interface: eth0 = management, eth1 = sender, eth2 = receiver, with the receiver on a different network than the sender so the traffic crosses the FortiGate. Add one in Proxmox (LXC > Network > Add: bridge and VLAN tag of the receiver network, firewall off) and restart the LXC, or on the Proxmox host: pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0";
+ else if(iso&&!cands.length)w="No interface available for the receiver"+(txn?" besides "+txn.parent+", which the sender uses":"")+". The throughput test needs a third interface: eth0 = management, eth1 = sender, eth2 = receiver, with the receiver on a different network than the sender so the traffic crosses the FortiGate. Add one in Proxmox (do not add it on this app\'s Network page; LXC > Network > Add: bridge and VLAN tag of the receiver network, firewall off) and restart the LXC, or on the Proxmox host: pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0";
  $("#tp-warn").textContent=w;$("#tp-warn").classList.toggle("hide",!w);tpBlocked=!!w}
 $("#tp-tx").onchange=()=>tpParents($("#tp-parent").value);
+function tpSender(){const n=tpCfg.networks.find(x=>x.name===$("#tp-tx").value);$("#tp-sender").textContent=n?`Sender IP ${n.first} on ${n.parent}, gateway ${n.gateway} (configured on the Network page).`:""}
 function tpMode(){tpParents($("#tp-parent").value);const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
- $("#tp-selftest").classList.toggle("hide",iso);$("#tp-hint").classList.toggle("hide",!iso);$("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver needs exactly one IP: it is assigned to a virtual interface on the NIC above, only while a test runs, so the NIC itself needs no IP. The receiver lives in its own network namespace on the interface above (a different interface than the sender) and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
+ $("#tp-selftest").classList.toggle("hide",iso);$("#tp-hint").classList.toggle("hide",!iso);$("#tp-hint").textContent=iso?"The receiver needs exactly one IP, assigned to a virtual interface on the receiver NIC only while a test runs, so the NIC itself needs no IP and nothing to configure on the Network page. The receiver must be in a different network than the sender, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender IP to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
 $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
 const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};

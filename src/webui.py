@@ -354,7 +354,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/tp/state":
                 return self._send(200, TP.state())
             if u.path == "/api/tp/config":
-                return self._send(200, {"throughput": cfg["throughput"], "networks": [{"name": n.get("name"), "parent": n.get("parent")} for n in cfg["networks"]],
+                return self._send(200, {"throughput": cfg["throughput"], "networks": [{"name": n.get("name"), "parent": n.get("parent"), "first": n.get("first"), "gateway": n.get("gateway")} for n in cfg["networks"]],
                                         "interfaces": [i["name"] for i in netconf.interfaces() if i["name"] != cfg["mgmt_interface"] and "." not in i["name"]]})
             if u.path == "/api/log":
                 e = CTRL.engine
