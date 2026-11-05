@@ -15,7 +15,7 @@ git clone https://github.com/s-ruiter/Traffic-Gen.git
 cd Traffic-Gen && bash install.sh
 ```
 
-The wizard creates a Debian 12 LXC with **two NICs**:
+The wizard creates a Debian 12 LXC (default 4 CPU cores, 2 GB RAM, 4 GB disk; 2 cores and 1 GB are enough for the traffic generator alone, the Throughput tester needs the extra cores for 1 Gbit/s) with **two NICs** and optionally a third for the Throughput receiver:
 
 | NIC  | Purpose | Setting |
 |------|---------|---------|

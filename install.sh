@@ -92,8 +92,8 @@ mapfile -t STORES < <(pvesm status -content rootdir | awk 'NR>1{print $1}')
 args=(); for s in "${STORES[@]}"; do args+=("$s" "storage"); done
 STORAGE=$(menu "Storage for the container disk" "${args[@]}")
 DISK=$(ask "Disk size (GB)" "4")
-CORES=$(ask "CPU cores" "2")
-MEM=$(ask "Memory (MB)" "1024")
+CORES=$(ask "CPU cores (4 recommended for 1 Gbit/s tests)" "4")
+MEM=$(ask "Memory (MB) (2048 recommended)" "2048")
 
 while :; do
   APW=$(whiptail --title "$TITLE" --passwordbox "Admin password for the WEB GUI (min. 8 characters; empty = generate)" 10 70 3>&1 1>&2 2>&3) || exit 1
