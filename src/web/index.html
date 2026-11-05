@@ -114,7 +114,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
    <div><label class="f">Intensity</label><div class="chips" id="intChips"></div></div>
    <div><label class="f">Sessions per source IP</label><input id="threads" type="number" min="1" max="20" style="width:90px"></div>
    <div style="flex:1"></div>
-   <div style="align-self:flex-end"><button class="big" id="go">Start test</button></div>
+   <div style="align-self:flex-end;display:flex;gap:10px;flex-wrap:wrap"><button class="sec hide" id="dlpdf">Download report (PDF)</button><button class="big" id="go">Start test</button></div>
   </div>
   <div class="mute" id="plan" style="margin-top:12px"></div>
   <div id="prog" class="hide" style="margin-top:14px"><div class="bar"><i id="progbar" style="width:0"></i></div><div class="row" style="justify-content:space-between;margin-top:6px"><span id="elapsed" class="mute"></span><span id="remain" class="mute"></span></div></div>
@@ -189,7 +189,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <div class="card hide" id="tp-tab1"></div>
  <div class="card hide" id="tp-tab2"></div>
  <div class="card hide" id="tp-logcard"><h2>Progress</h2><div class="log" id="tp-log"></div></div>
- <button class="sec hide" id="tp-dl">Download results (JSON)</button>
+ <div class="row"><button class="sec hide" id="tp-pdf">Download report (PDF)</button><button class="sec hide" id="tp-dl">Download results (JSON)</button></div>
 </section>
 
 <section id="p-set" class="hide">
@@ -258,7 +258,7 @@ async function poll(){
  $("#pill").className="pill"+(running?" run":"");$("#pill").textContent=running?"Test running":"Idle";
  $("#go").textContent=running?"Stop test":"Start test";$("#go").className="big"+(running?" danger":"");
  $$("#durChips .chip,#intChips .chip").forEach(c=>c.style.pointerEvents=running?"none":"");$("#threads").disabled=running;
- $$(".needrun").forEach(c=>c.classList.toggle("hide",!s.has_run));if(!s.has_run){$("#kpis").innerHTML="";return}
+ $("#dlpdf").classList.toggle("hide",!s.has_run);$$(".needrun").forEach(c=>c.classList.toggle("hide",!s.has_run));if(!s.has_run){$("#kpis").innerHTML="";return}
  const t=s.totals,tr=t.requests||0,ok=t.ok||0;
  const ser=s.series,now=ser.length?ser[ser.length-1]:null,prev=ser.length>2?ser[ser.length-3]:null;
  let mb=0,rps=0;if(now&&prev&&now[0]>prev[0]){mb=(now[2]-prev[2])*8/(now[0]-prev[0])/1e6;rps=(now[1]-prev[1])/(now[0]-prev[0])}
@@ -379,8 +379,10 @@ $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
 const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};
 $("#tp-check").onclick=async()=>{flash("#tmsg","Checking…","");try{await api("tp/config",tpPath());const r=await api("tp/check",{});flash("#tmsg",r.map(x=>(x.ok?"✔ ":"✘ ")+x.name+(x.detail?" — "+x.detail:"")).join("\n"),r.every(x=>x.ok)?"good":"err")}catch(e){flash("#tmsg",e.message,"err")}};
+$("#dlpdf").onclick=()=>{location.href="/api/report.pdf"};
 $$("[data-go]").forEach(b=>b.onclick=()=>$(`nav a[data-p="${b.dataset.go}"]`).click());
 $("#tp-go").onclick=async()=>{flash("#tmsg","");try{if(tpLast&&tpLast.running)await api("tp/stop",{});else{tpSaveVals();await api("tp/config",tpPath());await api("tp/start",{kind:tpKind,params:tpParams()})}tpPoll()}catch(e){flash("#tmsg",e.message,"err")}};
+$("#tp-pdf").onclick=()=>{location.href="/api/tp/report.pdf"};
 $("#tp-dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(tpLast,null,2)],{type:"application/json"}));a.download="throughput-"+(tpLast.kind||"test")+".json";a.click()};
 const f1=(v,d)=>v===null||v===undefined?"–":(+v).toFixed(d===undefined?2:d);
 function tpTable(id,title,head,rows){const e=$(id);e.classList.toggle("hide",!rows.length);if(!rows.length)return;
@@ -393,7 +395,7 @@ async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
  $$("#tp-kinds .chip").forEach(c=>c.style.pointerEvents=run?"none":"");$$("#tp-form [data-tk]").forEach(e=>e.disabled=run);
  if(s.error)flash("#tmsg",s.error,"err");
  const el=s.started?(s.finished||s.now)-s.started:0;$("#tp-bar").style.width=run?"100%":"0";
- $("#tp-dl").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));
+ $("#tp-dl").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));$("#tp-pdf").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));
  $("#tp-logcard").classList.toggle("hide",!s.log.length);$("#tp-log").innerHTML=s.log.slice().reverse().map(x=>"<div>"+esc(x)+"</div>").join("");
  // chart
  const unit=k==="cps"?"conn/s":"Mbit/s";$("#tp-chartcard").classList.toggle("hide",!ser.length);

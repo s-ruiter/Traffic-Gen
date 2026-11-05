@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 import netconf
+import report
 import throughput as tp
 import trafficgen as tg
 
@@ -351,6 +352,14 @@ class H(BaseHTTPRequestHandler):
                                         "mgmt_net": str(netconf.mgmt_network(cfg["mgmt_interface"]) or "")})
             if u.path == "/api/network":
                 return self._send(200, {"status": netconf.status(cfg), "log": CTRL.apply_log})
+            if u.path in ("/api/tp/report.pdf", "/api/report.pdf"):
+                tpr = u.path.startswith("/api/tp/")
+                st = TP.state() if tpr else CTRL.state()
+                if not (st.get("kind") if tpr else st.get("has_run")):
+                    return self._send(404, {"error": "No results yet."})
+                data = report.tp_report(st, VERSION) if tpr else report.traffic_report(st, VERSION)
+                name = "traffic-gen-%s-%s.pdf" % ("throughput-" + st["kind"] if tpr else "traffic", time.strftime("%Y%m%d-%H%M"))
+                return self._send(200, data, "application/pdf", {"Content-Disposition": 'attachment; filename="%s"' % name})
             if u.path == "/api/tp/state":
                 return self._send(200, TP.state())
             if u.path == "/api/tp/config":

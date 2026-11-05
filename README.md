@@ -57,6 +57,8 @@ The *Self-test* mode runs sender and receiver both inside the LXC on 127.0.0.1. 
 
 Load protection: the test processes run at low priority so the GUI stays responsive, the number of streams and workers is limited to what the LXC's CPU cores allow, and a CPU monitor shows the LXC load during a test. The GUI warns before a test starts when the chosen rate, frame sizes, connection count or run time will not fit this LXC (for example too few cores, very small frames, or many simultaneous connections that could fill the FortiGate session table), and during a test when the CPU stays saturated, because the result is then limited by the LXC instead of the network. For 1 Gbit/s give the LXC 4 CPU cores.
 
+Reports: after a test you can download the results as a **PDF report** (test setup, parameters, results, warnings, chart and tables) from the Throughput page and from the Traffic mix page; the Throughput page also offers the raw results as JSON. The PDF is generated on the LXC, no extra packages needed.
+
 Notes: the tester is written in Python, so a single LXC reaches roughly 0.1 to 1 Gbit/s depending on packet size and CPU cores. Small frames (64 bytes) are limited by packets per second, and such results are marked "limited by sender" instead of being reported as network loss. Throughput and CPU of the Proxmox host and bridge are part of the path being measured. Only one test (traffic or throughput) runs at a time. Results are also appended to `/var/log/trafficgen/throughput.jsonl`.
 
 ## Proxmox notes

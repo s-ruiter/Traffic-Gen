@@ -30,7 +30,7 @@ main() {
   [[ -f $TMP/src/trafficgen.py ]] || die "Downloaded archive looks wrong."
 
   echo ">> Updating LXC $CTID"
-  for f in trafficgen.py netconf.py webui.py throughput.py profiles.yaml; do
+  for f in trafficgen.py netconf.py webui.py throughput.py report.py profiles.yaml; do
     pct push "$CTID" "$TMP/src/$f" "/opt/trafficgen/$f" --perms 644
   done
   pct exec "$CTID" -- mkdir -p /opt/trafficgen/web
