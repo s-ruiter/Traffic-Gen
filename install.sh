@@ -72,9 +72,18 @@ DNS=$(ask "DNS server for management (empty = Proxmox host default)" "$GW")
 
 # traffic NIC (eth1)
 TBRIDGE=$(menu "Bridge for the TRAFFIC interface (eth1, towards the FortiGate)" "${args[@]}")
-TVLAN=$(ask "Tag for eth1 (empty = trunk/untagged; use VLANs in the GUI)" "")
+TVLAN=$(ask "VLAN tag for eth1 (set by Proxmox; empty = untagged)" "")
 NET1="name=eth1,bridge=$TBRIDGE,firewall=0"
 [[ -n $TVLAN ]] && NET1+=",tag=$TVLAN"
+
+# optional receiver NIC (eth2) for the Throughput tester
+NET2=""
+if whiptail --title "$TITLE" --yesno "Add a third interface (eth2) for the Throughput tester?\n\nThe sender uses eth1; the receiver needs its own interface on a different network, so test traffic crosses the FortiGate. You can also add it later in Proxmox." 12 72; then
+  RBRIDGE=$(menu "Bridge for the RECEIVER interface (eth2, towards another FortiGate port/VLAN)" "${args[@]}")
+  RVLAN=$(ask "VLAN tag for eth2 (set by Proxmox; empty = untagged)" "")
+  NET2="name=eth2,bridge=$RBRIDGE,firewall=0"
+  [[ -n $RVLAN ]] && NET2+=",tag=$RVLAN"
+fi
 
 PORT=$(ask "Web GUI port (HTTPS)" "8443")
 
@@ -98,10 +107,11 @@ whiptail --title "$TITLE" --yesno "Create LXC with:\n
  CTID/hostname : $CTID / $HOSTNAME
  eth0 (mgmt)   : $NET0
  eth1 (traffic): $NET1
+ eth2 (receiver): ${NET2:-none}
  GUI           : https://<mgmt-ip>:$PORT
  Resources     : $CORES cores, ${MEM}MB, ${DISK}GB on $STORAGE
 
-Continue?" 17 78 || exit 1
+Continue?" 18 78 || exit 1
 
 # --- template ----------------------------------------------------------------
 TSTORE=$(pvesm status -content vztmpl | awk 'NR>1{print $1; exit}')
@@ -122,6 +132,7 @@ create=(pct create "$CTID" "$TEMPLATE" --hostname "$HOSTNAME" --unprivileged 1
   --net0 "$NET0" --net1 "$NET1" --features nesting=1 --onboot 1 --password "$ROOTPW"
   --description "Traffic-Gen: FortiGate traffic generator (web GUI on mgmt IP :$PORT)")
 [[ -n $DNS ]] && create+=(--nameserver "$DNS")
+[[ -n $NET2 ]] && create+=(--net2 "$NET2")
 "${create[@]}"
 pct start "$CTID"
 

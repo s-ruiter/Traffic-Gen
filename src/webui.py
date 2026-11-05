@@ -204,9 +204,9 @@ def tp_validate_path(body, cfg):
     names = {i["name"] for i in netconf.interfaces()}
     if not parent or parent == cfg["mgmt_interface"] or "." in parent or parent not in names:
         raise ValueError("Receiver interface '%s' is invalid, missing or the management interface." % parent)
-    vlan = str(rx.get("vlan", "")).strip()
-    if vlan and not 1 <= int(vlan) <= 4094:
-        raise ValueError("Receiver VLAN must be between 1 and 4094.")
+    txn = next((n for n in cfg["networks"] if n.get("name") == out["tx_network"]), None)
+    if txn and txn["parent"] == parent:
+        raise ValueError("The receiver must use a different interface than the sender network (%s). Add a third interface to the LXC in Proxmox." % parent)
     try:
         ip = str(ipaddress.IPv4Address(str(rx.get("ip", "")).strip()))
         prefix = int(rx.get("prefix", 24))
@@ -224,7 +224,7 @@ def tp_validate_path(body, cfg):
     mnet = netconf.mgmt_network(cfg["mgmt_interface"])
     if mnet and net.overlaps(mnet):
         raise ValueError("Receiver network %s overlaps with the management network." % net)
-    out["rx"].update({"parent": parent, "vlan": int(vlan) if vlan else "", "ip": ip, "prefix": prefix, "gateway": gw})
+    out["rx"].update({"parent": parent, "vlan": "", "ip": ip, "prefix": prefix, "gateway": gw})
     return out
 
 
@@ -244,6 +244,8 @@ def tp_params(kind, body, cfg):
             raise ValueError("Choose a sender network first (Throughput > Path).")
         if not t["rx"]["ip"]:
             raise ValueError("Configure the receiver first (Throughput > Path).")
+        if t["rx"]["parent"] == n["parent"]:
+            raise ValueError("The receiver must use a different interface than the sender network (%s). Add a third interface to the LXC in Proxmox." % n["parent"])
         p["tx_ip"] = n["first"]
         if p["tx_ip"] not in netconf.live_addrs().get(netconf.dev_of(n), set()):
             raise ValueError("Sender IP %s is not active. Click 'Apply' on the Network page first." % p["tx_ip"])
@@ -348,7 +350,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/tp/state":
                 return self._send(200, TP.state())
             if u.path == "/api/tp/config":
-                return self._send(200, {"throughput": cfg["throughput"], "networks": [n.get("name") for n in cfg["networks"]],
+                return self._send(200, {"throughput": cfg["throughput"], "networks": [{"name": n.get("name"), "parent": n.get("parent")} for n in cfg["networks"]],
                                         "interfaces": [i["name"] for i in netconf.interfaces() if i["name"] != cfg["mgmt_interface"] and "." not in i["name"]]})
             if u.path == "/api/log":
                 e = CTRL.engine

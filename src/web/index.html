@@ -127,14 +127,14 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <div class="card"><h2>Path</h2>
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
    <div><label class="f">Sender network</label><select id="tp-tx"></select></div>
-   <div><label class="f">Receiver</label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Loopback self-test</option></select></div>
+   <div><label class="f">Receiver</label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Self-test (this LXC only, no FortiGate)</option></select></div>
    <div class="tp-iso"><label class="f">Interface</label><select id="tp-parent"></select></div>
-   <div class="tp-iso"><label class="f">VLAN (optional)</label><input id="tp-vlan" type="number" min="1" max="4094"></div>
    <div class="tp-iso"><label class="f">Receiver IP</label><input id="tp-ip" placeholder="10.10.30.10"></div>
    <div class="tp-iso"><label class="f">Prefix</label><input id="tp-prefix" type="number" min="8" max="30"></div>
    <div class="tp-iso"><label class="f">Gateway (FortiGate)</label><input id="tp-gw" placeholder="10.10.30.1"></div>
    <div><label class="f">Base port</label><input id="tp-port" type="number" min="1024" max="65000"></div>
   </div>
+  <div class="msg err hide" id="tp-warn" style="margin-top:12px"></div>
   <div class="mute" id="tp-hint" style="margin-top:10px"></div>
   <div class="row" style="margin-top:12px"><button class="sec" id="tp-save">Save</button><button class="sec" id="tp-check">Check environment</button></div></div>
  <div class="card"><h2>Test</h2>
@@ -276,7 +276,7 @@ function renderNets(st){st=st||[];
   <span>${s?`<span class="pill ${s.have===s.want?"run":""}">${s.have}/${s.want} IPs active</span> `:""}<a class="mute" style="cursor:pointer" data-rm="${i}">remove</a></span></div>
   <div class="grid"><div><label class="f">Name</label><input data-k="name" value="${esc(n.name)}"></div>
   <div><label class="f">Interface</label><select data-k="parent">${ifs.map(x=>`<option ${x.name===n.parent?"selected":""}>${esc(x.name)}</option>`).join("")}</select></div>
-  <div><label class="f">VLAN (optional)</label><input data-k="vlan" type="number" min="1" max="4094" value="${esc(n.vlan||"")}"></div>
+  ${n.vlan?`<div><label class="f">VLAN tag inside LXC (legacy)</label><input data-k="vlan" type="number" min="1" max="4094" value="${esc(n.vlan||"")}"></div>`:""}
   <div><label class="f">First source IP</label><input data-k="first" value="${esc(n.first)}" placeholder="10.10.20.101"></div>
   <div><label class="f">Prefix</label><input data-k="prefix" type="number" min="8" max="30" value="${esc(n.prefix)}"></div>
   <div><label class="f">Number of IPs</label><input data-k="count" type="number" min="1" max="250" value="${esc(n.count)}"></div>
@@ -309,14 +309,21 @@ function tpSaveVals(){const o={};$$("#tp-form [data-tk]").forEach(e=>o[e.dataset
 function tpParams(){const o={};$$("#tp-form [data-tk]").forEach(e=>{const k=e.dataset.tk,f=TP[tpKind].f.find(x=>x[0]===k),t=f[3];
  o[k]=t==="bool"?e.value==="1":t==="sel"?e.value:k==="sizes"?e.value.split(",").map(x=>+x.trim()).filter(Boolean):e.value.trim()===""?"":+e.value});return o}
 async function loadTp(){tpCfg=await api("tp/config");const t=tpCfg.throughput,rx=t.rx;
- $("#tp-tx").innerHTML=tpCfg.networks.map(n=>`<option ${n===t.tx_network?"selected":""}>${esc(n)}</option>`).join("")||"<option value=''>(add a source network first)</option>";
- $("#tp-parent").innerHTML=tpCfg.interfaces.map(n=>`<option ${n===rx.parent?"selected":""}>${esc(n)}</option>`).join("");
- $("#tp-mode").value=rx.mode;$("#tp-vlan").value=rx.vlan||"";$("#tp-ip").value=rx.ip||"";$("#tp-prefix").value=rx.prefix||24;$("#tp-gw").value=rx.gateway||"";$("#tp-port").value=t.base_port;
+ $("#tp-tx").innerHTML=tpCfg.networks.map(n=>`<option ${n.name===t.tx_network?"selected":""}>${esc(n.name)}</option>`).join("")||"<option value=''>(add a source network first)</option>";
+ $("#tp-mode").value=rx.mode;tpParents(rx.parent);$("#tp-ip").value=rx.ip||"";$("#tp-prefix").value=rx.prefix||24;$("#tp-gw").value=rx.gateway||"";$("#tp-port").value=t.base_port;
  tpMode();tpForm();tpPoll()}
-function tpMode(){const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
- $("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver lives in its own network namespace on the interface/VLAN above and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run on 127.0.0.1. This measures the tool itself, not the FortiGate."}
+let tpBlocked=false;
+function tpParents(sel){const txn=tpCfg.networks.find(n=>n.name===$("#tp-tx").value),cands=tpCfg.interfaces.filter(i=>!txn||i!==txn.parent);
+ $("#tp-parent").innerHTML=cands.map(n=>`<option ${n===sel?"selected":""}>${esc(n)}</option>`).join("");
+ const iso=$("#tp-mode").value==="isolated";let w="";
+ if(iso&&!tpCfg.networks.length)w="No source network yet. Add and apply one on the Network page first; the sender uses it.";
+ else if(iso&&!cands.length)w="No interface available for the receiver"+(txn?" besides "+txn.parent+", which the sender uses":"")+". The throughput test needs a third interface: eth0 = management, eth1 = sender, eth2 = receiver, with the receiver on a different network than the sender so the traffic crosses the FortiGate. Add one in Proxmox (LXC > Network > Add: bridge and VLAN tag of the receiver network, firewall off) and restart the LXC, or on the Proxmox host: pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0";
+ $("#tp-warn").textContent=w;$("#tp-warn").classList.toggle("hide",!w);tpBlocked=!!w}
+$("#tp-tx").onchange=()=>tpParents($("#tp-parent").value);
+function tpMode(){tpParents($("#tp-parent").value);const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
+ $("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver lives in its own network namespace on the interface above (a different interface than the sender) and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
 $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
-const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,vlan:$("#tp-vlan").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
+const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};
 $("#tp-check").onclick=async()=>{flash("#tmsg","Checking…","");try{await api("tp/config",tpPath());const r=await api("tp/check",{});flash("#tmsg",r.map(x=>(x.ok?"✔ ":"✘ ")+x.name+(x.detail?" — "+x.detail:"")).join("\n"),r.every(x=>x.ok)?"good":"err")}catch(e){flash("#tmsg",e.message,"err")}};
 $("#tp-go").onclick=async()=>{flash("#tmsg","");try{if(tpLast&&tpLast.running)await api("tp/stop",{});else{tpSaveVals();await api("tp/config",tpPath());await api("tp/start",{kind:tpKind,params:tpParams()})}tpPoll()}catch(e){flash("#tmsg",e.message,"err")}};
@@ -327,7 +334,7 @@ function tpTable(id,title,head,rows){const e=$(id);e.classList.toggle("hide",!ro
 async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
  if(!tpInit&&s.kind&&TP[s.kind]){tpInit=true;tpKind=s.kind;tpForm()}
  tpInit=true;tpLast=s;const run=s.running,k=s.kind||tpKind,r=s.result,ser=s.series||[];
- $("#tp-go").textContent=run?"Stop test":"Start test";$("#tp-go").className="big"+(run?" danger":"");$("#tp-pill").className="pill"+(run?" run":"");$("#tp-pill").textContent=run?"Running":(s.error?"Failed":s.stopped?"Stopped":s.finished?"Finished":"Idle");
+ $("#tp-go").disabled=!run&&tpBlocked;$("#tp-check").disabled=tpBlocked;$("#tp-go").textContent=run?"Stop test":"Start test";$("#tp-go").className="big"+(run?" danger":"");$("#tp-pill").className="pill"+(run?" run":"");$("#tp-pill").textContent=run?"Running":(s.error?"Failed":s.stopped?"Stopped":s.finished?"Finished":"Idle");
  $("#tp-phase").textContent=s.phase?(s.steps>1?"step "+Math.min(s.step||s.rows.length+1,s.steps)+"/"+s.steps+" · ":"")+s.phase+(s.mode==="loopback"?" · loopback self-test":""):"";
  $$("#tp-kinds .chip").forEach(c=>c.style.pointerEvents=run?"none":"");$$("#tp-form [data-tk]").forEach(e=>e.disabled=run);
  if(s.error)flash("#tmsg",s.error,"err");

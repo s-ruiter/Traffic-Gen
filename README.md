@@ -1,6 +1,6 @@
 # Traffic-Gen
 
-A Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) from **multiple source IPs and VLANs**, to monitor a FortiGate (SD-WAN, Application Control, Web Filter) and to test its security efficacy.
+A Proxmox LXC with a web GUI that generates realistic user traffic (Netflix, YouTube, Facebook, Teams, Office 365, Zoom, Salesforce, updates, SD-WAN probes, ...) from **multiple source IPs and networks**, to monitor a FortiGate (SD-WAN, Application Control, Web Filter) and to test its security efficacy.
 
 ## Install (on the Proxmox host, as root)
 
@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh
 
 - **Dashboard**: duration (5 min to 2 hours, until stopped, or custom), intensity, sessions per IP, start/stop, live throughput, requests, blocked/errors, per application and per source IP, latest requests.
 - **Traffic mix**: weight per group (Microsoft 365, Collaboration, Streaming, Social, SaaS, Web, Updates, Downloads, SD-WAN probes, Web filter test, Malware, IOC) and per-app on/off.
-- **Network**: per source network the interface (eth1), optional VLAN, first IP, prefix, number of IPs, gateway and DNS. *Apply* creates the VLAN sub-interface, adds the IPs and sets up source-based routing, so test traffic goes through its own gateway (the FortiGate) and management stays separate. *Test connection* pings the gateway and tests DNS from the source network.
+- **Network**: per source network the interface (eth1), first IP, prefix, number of IPs, gateway and DNS. *Apply* creates the VLAN sub-interface, adds the IPs and sets up source-based routing, so test traffic goes through its own gateway (the FortiGate) and management stays separate. *Test connection* pings the gateway and tests DNS from the source network.
 - **Throughput**: bandwidth, packet loss (UDP, TCP, RFC 2544) and connections-per-second tests between two networks.
 - **Settings**: change password, verify TLS certificates of target sites (off by default, for SSL deep inspection) and the IOC switches.
 
@@ -51,15 +51,15 @@ The **Throughput** page turns the LXC into a small bandwidth tester (up to about
 - **RFC 2544**: throughput (binary search for the highest rate within your loss tolerance), optional frame loss rate and latency at the throughput rate, for the standard frame sizes 64 to 1518 bytes.
 - **Connections per second**: TCP connections at a set rate, optionally ramped up in steps, with optional request/response payload and hold time. Reports established/failed connections, achieved rate and connect latency, and the highest sustained rate.
 
-Setup (**Throughput > Path**): pick the sender network (the first IP of a network from the Network page, which must be applied) and describe the receiver: interface or VLAN, receiver IP, prefix and gateway. The receiver must be in a *different* network than the sender, so the traffic crosses the FortiGate. It lives in its own network namespace on a VLAN/macvlan interface of the chosen NIC (for example eth1 with another VLAN, or an extra NIC such as eth2 that you add to the LXC in Proxmox) and is created only while a test runs. Allow UDP and TCP on ports 5201-5208 (configurable base port) from the sender network to the receiver IP in the FortiGate policy. *Check environment* verifies the setup and the gateway.
+Setup (**Throughput > Path**): pick the sender network (the first IP of a network from the Network page, which must be applied) and describe the receiver: interface, receiver IP, prefix and gateway. The test needs a **third interface**: eth0 is management, eth1 is the sender, and eth2 is the receiver. The receiver must be in a *different* network than the sender, so the traffic crosses the FortiGate. VLAN tags are set by Proxmox on the LXC network device, not in the app. The installer can add eth2 for you; for an existing LXC run `pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0` on the Proxmox host and restart the LXC. The GUI warns when no suitable interface is available. The receiver lives in its own network namespace on a macvlan interface of eth2 and is created only while a test runs. Allow UDP and TCP on ports 5201-5208 (configurable base port) from the sender network to the receiver IP in the FortiGate policy. *Check environment* verifies the setup and the gateway.
 
-The *Loopback self-test* mode runs both ends on 127.0.0.1 to test the tool itself.
+The *Self-test* mode runs sender and receiver both inside the LXC on 127.0.0.1. The traffic never leaves the LXC and does not touch the FortiGate; use it to see what the LXC itself can generate and to check that the tool works.
 
 Notes: the tester is written in Python, so a single LXC reaches roughly 0.1 to 1 Gbit/s depending on packet size and CPU cores. Small frames (64 bytes) are limited by packets per second, and such results are marked "limited by sender" instead of being reported as network loss. Throughput and CPU of the Proxmox host and bridge are part of the path being measured. Only one test (traffic or throughput) runs at a time. Results are also appended to `/var/log/trafficgen/throughput.jsonl`.
 
 ## Proxmox notes
 
-- If you use VLANs in the GUI, leave the eth1 tag empty in the wizard and make sure the bridge is VLAN-aware and passes the VLANs you need. For a single flat network you can set a tag on eth1.
+- VLAN tags are set by Proxmox on each LXC network device (the tag fields in the wizard, or `pct set`). The GUI no longer shows a VLAN field; a network that was saved earlier with a VLAN keeps working and still shows it.
 - Network changes are applied on *Apply* and when the service starts. Applying is blocked while a test is running.
 
 ## Logs and CLI
