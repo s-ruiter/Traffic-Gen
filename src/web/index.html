@@ -135,6 +135,9 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
    <div><label class="f">Base port</label><input id="tp-port" type="number" min="1024" max="65000"></div>
   </div>
   <div class="msg err hide" id="tp-warn" style="margin-top:12px"></div>
+  <div class="msg hide" id="tp-selftest" style="margin-top:12px"><b>What the self-test does.</b> Sender and receiver both run inside this LXC and talk to each other over 127.0.0.1 (the loopback interface). The packets never leave the LXC: they do not reach a network interface, the Proxmox bridge or the FortiGate.
+<b>Use it to</b> check that the tool works and to see the highest rate this LXC can generate and receive (limited by its CPU cores and the Python engine). That tells you whether a limit in a real test comes from the tool or from the network.
+<b>Do not use it to</b> judge the FortiGate, your bandwidth or packet loss: loss is normally 0% and latency is tiny by design. For real results choose <i>Isolated (via FortiGate)</i> and a receiver interface.</div>
   <div class="mute" id="tp-hint" style="margin-top:10px"></div>
   <div class="row" style="margin-top:12px"><button class="sec" id="tp-save">Save</button><button class="sec" id="tp-check">Check environment</button></div></div>
  <div class="card"><h2>Test</h2>
@@ -143,6 +146,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
   <div class="mute" id="tp-desc" style="margin:12px 0"></div>
   <div class="row"><button class="big" id="tp-go">Start test</button><span class="pill" id="tp-pill">Idle</span><span class="mute" id="tp-phase"></span></div>
   <div class="bar" style="margin-top:14px"><i id="tp-bar" style="width:0"></i></div></div>
+ <div class="msg hide" id="tp-selfnote"><b>Self-test result.</b> This traffic stayed inside the LXC (127.0.0.1) and did not cross the FortiGate. The numbers show what this LXC can generate, not the performance of your network or firewall.</div>
  <div class="grid kpis" id="tp-kpis"></div>
  <div class="card hide" id="tp-chartcard"><h2 id="tp-charttitle">Throughput</h2><canvas id="tp-chart"></canvas>
   <div class="row mute" style="margin-top:6px"><span><span class="mini" style="width:14px"></span> <span id="tp-l1">sent</span></span><span><span class="mini" style="width:14px;background:#0f1012"></span> <span id="tp-l2">received</span></span></div></div>
@@ -321,7 +325,7 @@ function tpParents(sel){const txn=tpCfg.networks.find(n=>n.name===$("#tp-tx").va
  $("#tp-warn").textContent=w;$("#tp-warn").classList.toggle("hide",!w);tpBlocked=!!w}
 $("#tp-tx").onchange=()=>tpParents($("#tp-parent").value);
 function tpMode(){tpParents($("#tp-parent").value);const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
- $("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver lives in its own network namespace on the interface above (a different interface than the sender) and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
+ $("#tp-selftest").classList.toggle("hide",iso);$("#tp-hint").classList.toggle("hide",!iso);$("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver lives in its own network namespace on the interface above (a different interface than the sender) and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
 $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
 const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};
@@ -353,6 +357,7 @@ async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
  else if(k==="tcp"&&r)K=kpi("Throughput",f1(r.rx_mbps)+" Mbit/s")+kpi("Peak (1 s)",f1(r.peak_mbps)+" Mbit/s")+kpi("Data",fbytes(r.rx_bytes))+kpi("Streams",r.opened+"/"+r.streams)+kpi("Errors",r.errors,r.errors?"bad":"")+kpi("Resets",r.resets,r.resets?"warn":"");
  else if(k==="cps"&&s.rows.length){const l=s.rows[s.rows.length-1];K=(r?kpi("Max sustained",fmt(r.max_ok_cps)+" conn/s",r.max_ok_cps?"ok":"bad"):"")+kpi("Established",fmt(l.established)+" / "+fmt(l.attempted))+kpi("Failed",f1(l.fail_pct,2)+" %",l.fail_pct?"bad":"ok")+kpi("Avg / peak",f1(l.avg_cps,0)+" / "+l.peak_cps+" conn/s")+kpi("Connect p50 / p95",f1(l.lat_p50_ms)+" / "+f1(l.lat_p95_ms)+" ms")+(l.limited?kpi("Sender limit","reached","warn"):"")}
  else if(run&&ser.length){const l=ser[ser.length-1];K=kpi(k==="cps"?"Attempted/s":"Sent",f1(l[1],k==="cps"?0:1)+" "+unit)+kpi(k==="cps"?"Established/s":"Received",f1(l[2],k==="cps"?0:1)+" "+unit)+(k==="cps"?kpi("Open",l[3]):kpi("Loss",f1(l[3],3)+" %"))}
+ $("#tp-selfnote").classList.toggle("hide",!(s.mode==="loopback"&&(r||s.rows.length||ser.length)));
  $("#tp-kpis").innerHTML=K;
  // tables
  if(k==="rfc2544"){tpTable("#tp-tab1","Throughput and latency (RFC 2544)",[["Frame (B)",1],["Line rate (pps)",1],["Throughput",1],["% of link",1],["Mbit/s",1],["Loss %",1],["Latency min / avg / max (ms)",1],["Jitter (ms)",1],["Note",0]],
