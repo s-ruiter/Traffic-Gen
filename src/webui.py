@@ -267,7 +267,7 @@ def tp_params(kind, body, cfg):
     elif kind == "tcp":
         p.update(streams=_num(body, "streams", 1, 32, 4, int), duration=_num(body, "duration", 1, 3600, 10))
     elif kind == "cps":
-        p.update(rate=_num(body, "rate", 1, 50000, 1000), duration=_num(body, "duration", 1, 600, 10),
+        p.update(rate=_num(body, "rate", 1, 50000, 1000), duration=_num(body, "duration", 1, 3600, 10),
                  ramp=bool(body.get("ramp")), step=_num(body, "step", 1, 50000, 500), steps=_num(body, "steps", 1, 20, 5, int),
                  req=_num(body, "req", 0, 65000, 0, int), resp=_num(body, "resp", 0, 65000, 0, int),
                  hold_ms=_num(body, "hold_ms", 0, 60000, 0, int), close="fin" if body.get("close") == "fin" else "rst",

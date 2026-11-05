@@ -17,6 +17,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+import random
 import selectors
 import socket
 import struct
@@ -532,7 +533,13 @@ def _cps_tx(conn, src, dst, ports, rate, dur, req, resp, hold_ms, rst, tmo):
                                errno.ECONNRESET: "reset"}.get(e, "error"))
                     continue
                 c["est"] += 1
-                lats.append(clock() - ent[1])
+                lt = clock() - ent[1]
+                if len(lats) < 100000:                     # keep a uniform sample so long tests do not grow without bound
+                    lats.append(lt)
+                else:
+                    j = random.randrange(c["est"])
+                    if j < 100000:
+                        lats[j] = lt
                 if req > 0:
                     try:
                         s.send(b"x" * req)
