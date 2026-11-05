@@ -111,6 +111,7 @@ class RxNet:
             raise RuntimeError("could not create a network namespace (is 'unshare -n' allowed in this LXC?)")
         try:
             run(["ip", "link", "del", RX_DEV], check=False)
+            run(["ip", "link", "set", rx["parent"], "up"])          # the parent NIC has no IP, so it may still be down
             if rx.get("vlan"):
                 run(["ip", "link", "add", "link", rx["parent"], "name", RX_DEV, "type", "vlan", "id", str(int(rx["vlan"]))])
             else:
@@ -127,12 +128,22 @@ class RxNet:
             self.down()
             raise
 
-    def gateway_ping(self):
+    def gateway_probe(self):
+        """(ping answered, ARP answered) for the receiver gateway, from inside the receiver namespace."""
         gw = self.rx.get("gateway")
         if not gw:
+            return None, None
+        ns = ["nsenter", "-t", str(self.pid), "-n"]
+        ping = run(ns + ["ping", "-c", "2", "-W", "1", "-I", self.rx["ip"], gw], check=False).returncode == 0
+        arp = run(ns + ["arping", "-c", "2", "-w", "3", "-I", RX_DEV, gw], check=False).returncode == 0
+        return ping, arp
+
+    def carrier(self):
+        try:
+            with open("/sys/class/net/%s/carrier" % self.rx["parent"]) as f:
+                return f.read().strip() == "1"
+        except OSError:
             return None
-        r = run(["nsenter", "-t", str(self.pid), "-n", "ping", "-c", "2", "-W", "1", "-I", self.rx["ip"], gw], check=False)
-        return r.returncode == 0
 
     def down(self):
         if self.holder:
@@ -1156,9 +1167,21 @@ def check_env(rx):
     try:
         net.up()
         add("receiver namespace + %s on %s" % ("VLAN" if rx.get("vlan") else "macvlan", rx.get("parent")), True, "")
-        gp = net.gateway_ping()
-        if gp is not None:
-            add("receiver can reach gateway %s" % rx.get("gateway"), gp, "" if gp else "No ping reply. Check the VLAN/bridge and the FortiGate interface or policy.")
+        car = net.carrier()
+        if car is not None:
+            add("link on %s" % rx.get("parent"), car, "" if car else
+                "No carrier. Check in Proxmox that the NIC is connected to the right bridge (and VLAN tag) and that the FortiGate port is up.")
+        ping, arp = net.gateway_probe()
+        gw = rx.get("gateway")
+        if ping:
+            add("receiver can reach gateway %s" % gw, True, "")
+        elif arp:
+            add("receiver can reach gateway %s" % gw, True,
+                "The gateway answers ARP, so the link works, but it does not answer ping. Enable PING under Administrative Access on that FortiGate interface if you want ping to work; the tests themselves do not need it.")
+        elif ping is not None:
+            add("receiver can reach gateway %s" % gw, False,
+                "No ping and no ARP reply, so frames do not reach the gateway. Check: (1) the FortiGate has IP %s on the interface or VLAN interface connected to this NIC, (2) the bridge and VLAN tag of this NIC in Proxmox, "
+                "(3) the Proxmox firewall is off on this NIC (firewall=0), (4) the receiver IP %s/%s is in the same network as the gateway." % (gw, rx.get("ip"), rx.get("prefix")))
     except Exception as e:  # noqa
         add("receiver namespace", False, str(e))
     finally:
