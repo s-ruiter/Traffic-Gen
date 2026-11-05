@@ -33,6 +33,11 @@ CLONE_NEWNET = 0x40000000
 RX_DEV = "tgrx0"
 MAX_STREAMS = 8
 SEC = 1_000_000_000
+try:
+    CPUS = len(os.sched_getaffinity(0)) or 1          # respects the LXC's CPU limit (cpuset)
+except AttributeError:
+    CPUS = os.cpu_count() or 1
+STREAM_CAP = max(1, min(MAX_STREAMS, CPUS // 2))     # one stream = one sender + one receiver process
 
 
 def mono():
@@ -48,6 +53,21 @@ def _die_with_parent():
     try:
         _libc().prctl(1, 9)           # PR_SET_PDEATHSIG, SIGKILL
     except Exception:  # noqa
+        pass
+
+
+def _worker_init():
+    """Workers die with the web service, run at low priority (the GUI keeps priority) and may open many sockets."""
+    _die_with_parent()
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard if hard != resource.RLIM_INFINITY else 1048576, hard))
+    except (ImportError, ValueError, OSError):
         pass
 
 
@@ -148,7 +168,7 @@ class UdpStat:
             self.maxseq = seq
         else:
             self.reorder += 1
-        if seq < (1 << 27):
+        if seq < (1 << 25):
             if seq >= len(self.bm):
                 self.bm.extend(bytes(max(seq + 1 - len(self.bm), 1 << 16)))
             if self.bm[seq]:
@@ -184,7 +204,7 @@ class UdpStat:
 
 
 def _udp_rx(conn, ns_pid, bind_ip, port):
-    _die_with_parent()
+    _worker_init()
     try:
         if ns_pid:
             enter_netns(ns_pid)
@@ -228,7 +248,7 @@ def _udp_rx(conn, ns_pid, bind_ip, port):
 
 
 def _udp_tx(conn, src, dst, port, sid, size, pps, dur):
-    _die_with_parent()
+    _worker_init()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
@@ -268,7 +288,7 @@ def _udp_tx(conn, src, dst, port, sid, size, pps, dur):
 
 # ------------------------------------------------------------ TCP receiver
 def _tcp_rx(conn, ns_pid, bind_ip, ports):
-    _die_with_parent()
+    _worker_init()
     sel = selectors.DefaultSelector()
     try:
         if ns_pid:
@@ -285,12 +305,15 @@ def _tcp_rx(conn, ns_pid, bind_ip, ports):
         return
     conn.send(("ready", None))
     buf = bytearray(1 << 18)
-    mode, resp, t0 = None, 0, mono()
+    mode, resp, t0 = None, 0, [None]
     acc = byt = rst = maxact = 0
     ps, live = [], {}
 
     def sec():
-        i = (mono() - t0) // SEC
+        now = mono()
+        if t0[0] is None:
+            t0[0] = now
+        i = (now - t0[0]) // SEC
         while len(ps) <= i:
             ps.append([0, 0])
         return ps[i]
@@ -344,12 +367,12 @@ def _tcp_rx(conn, ns_pid, bind_ip, ports):
             cmd = conn.recv()
             if cmd[0] == "arm":
                 p = cmd[1] or {}
-                mode, resp, t0 = p.get("mode", "stream"), int(p.get("resp", 0)), mono()
+                mode, resp, t0 = p.get("mode", "stream"), int(p.get("resp", 0)), [None]
                 acc = byt = rst = maxact = 0
                 ps = []
                 conn.send(("ok", None))
             elif cmd[0] == "snap":
-                conn.send(("snap", {"n": acc, "bytes": byt, "active": len(live)}))
+                conn.send(("snap", {"n": acc, "bytes": byt, "active": len(live), "persec": [list(x) for x in ps]}))
             elif cmd[0] == "collect":
                 conn.send(("final", {"n": acc, "bytes": byt, "resets": rst, "max_active": maxact, "persec": ps}))
                 mode = None
@@ -359,7 +382,7 @@ def _tcp_rx(conn, ns_pid, bind_ip, ports):
 
 # ------------------------------------------------------------ CPS sender
 def _cps_tx(conn, src, dst, ports, rate, dur, req, resp, hold_ms, rst, tmo):
-    _die_with_parent()
+    _worker_init()
     sel = selectors.DefaultSelector()
     clock = time.monotonic
     start = clock()
@@ -501,6 +524,11 @@ class Ctx:
         self.net = None
         self.udp, self.tcp = [], None
 
+    def warn(self, msg):
+        w = self.progress.setdefault("warnings", [])
+        if msg not in w:
+            w.append(msg)
+
     def up(self):
         if not self.loopback:
             self.net = RxNet(self.p["rx"])
@@ -535,7 +563,7 @@ class Ctx:
         return self.tcp
 
     @staticmethod
-    def ask(conn, msg, tmo=5):
+    def ask(conn, msg, tmo=15):
         conn.send(msg)
         if not conn.poll(tmo):
             raise RuntimeError("receiver not responding")
@@ -558,6 +586,17 @@ class Ctx:
             raise Stopped()
 
 
+def _drain(a):
+    """Read all pending messages; second value is True when the other end is gone."""
+    out = []
+    try:
+        while a.poll():
+            out.append(a.recv())
+    except (EOFError, OSError):
+        return out, True
+    return out, False
+
+
 def merge_ps(lists, idx):
     return sum(l[idx] for l in lists if idx < len(l))
 
@@ -565,7 +604,11 @@ def merge_ps(lists, idx):
 def udp_trial(ctx, payload, pps, dur, streams, series=None):
     """One UDP trial: returns a result dict."""
     payload = max(payload, HDR_LEN)
-    streams = max(1, min(streams, MAX_STREAMS))
+    want = max(1, min(streams, MAX_STREAMS))
+    streams = min(want, STREAM_CAP)
+    if streams < want:
+        ctx.warn("Streams reduced from %d to %d: this LXC has %d CPU core(s) and each stream needs a sender and a receiver process. "
+                 "Give the LXC more cores for higher rates." % (want, streams, CPUS))
     rxs = ctx.udp_rx(streams)
     for _pr, conn in rxs:
         ctx.ask(conn, ("arm",))
@@ -593,6 +636,8 @@ def udp_trial(ctx, payload, pps, dur, streams, series=None):
             rx = sum(r["persec"][k][0] for r in rs if r.get("persec") and k < len(r["persec"]))
             out.append([k + 1, round(tx * bits / 1e6, 2), round(rx * bits / 1e6, 2),
                         round(max(0.0, (tx - rx) / tx * 100), 3) if tx else 0.0])
+        while not live and len(out) > 1 and out[-1][1] == 0:
+            out.pop()
         return out
 
     try:
@@ -606,8 +651,8 @@ def udp_trial(ctx, payload, pps, dur, streams, series=None):
                 raise Stopped()
             time.sleep(1.0)
             for i, a in enumerate(pipes):
-                while a.poll():
-                    m = a.recv()
+                msgs, eof = _drain(a)
+                for m in msgs:
                     if m[0] == "tick":
                         sent_cum[i] = m[1]
                         hist[i].append(m[1])
@@ -618,6 +663,9 @@ def udp_trial(ctx, payload, pps, dur, streams, series=None):
                     elif m[0] == "error":
                         err = m[1]
                         done[i] = {"sent": 0, "errors": 0, "elapsed": 0}
+                if eof and done[i] is None:
+                    err = "sender process stopped unexpectedly"
+                    done[i] = {"sent": 0, "errors": 0, "elapsed": 0}
             if err:
                 raise RuntimeError("sender: " + err)
             snaps = [ctx.ask(c, ("snap",)) or {} for _p, c in rxs]
@@ -653,68 +701,134 @@ def udp_trial(ctx, payload, pps, dur, streams, series=None):
     }
 
 
-def tcp_trial(ctx, streams, dur, series=None):
-    streams = max(1, min(streams, MAX_STREAMS * 4))
-    _pr, rconn = ctx.tcp_rx()
-    ctx.ask(rconn, ("arm", {"mode": "stream"}))
-    lock = threading.Lock()
-    ps, errs, opened = [], [], [0]
-    end = [0.0]
+def _tcp_tx(conn, src, dst, ports, nconn, dur, first):
+    """One process drives `nconn` TCP connections (threads; sendall releases the GIL)."""
+    _worker_init()
+    lock, stop = threading.Lock(), threading.Event()
+    st = {"bytes": 0, "opened": 0, "errors": 0, "msg": ""}
+    t0 = time.monotonic()
+    end = t0 + dur
 
-    def worker(i):
+    def one(i):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind((ctx.src, 0))
+            s.bind((src, 0))
             s.settimeout(5)
-            s.connect((ctx.dst, ctx.base + i % MAX_STREAMS))
+            s.connect((dst, ports[(first + i) % len(ports)]))
             s.settimeout(2)
         except OSError as e:
-            errs.append(str(e))
+            with lock:
+                st["errors"] += 1
+                st["msg"] = str(e)
             return
         with lock:
-            opened[0] += 1
+            st["opened"] += 1
         chunk = b"\x5a" * (128 * 1024)
-        while time.monotonic() < end[0] and not ctx.stop.is_set():
+        while time.monotonic() < end and not stop.is_set():
             try:
                 s.sendall(chunk)
             except OSError as e:
-                errs.append(str(e))
+                with lock:
+                    st["errors"] += 1
+                    st["msg"] = str(e)
                 break
-            i2 = int(time.monotonic() - t_start)
             with lock:
-                while len(ps) <= i2:
-                    ps.append(0)
-                ps[i2] += len(chunk)
+                st["bytes"] += len(chunk)
         s.close()
 
-    t_start = time.monotonic()
-    end[0] = t_start + dur
-    ths = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(streams)]
+    ths = [threading.Thread(target=one, args=(i,), daemon=True) for i in range(nconn)]
     for t in ths:
         t.start()
-    prev_tx = prev_rx = 0
-    sec_i = 0
+    nxt = t0 + 1
     while any(t.is_alive() for t in ths):
-        time.sleep(1.0)
-        sec_i += 1
-        snap = ctx.ask(rconn, ("snap",))
-        with lock:
-            tx = sum(ps)
-        if series is not None:
-            series.append([sec_i, round((tx - prev_tx) * 8 / 1e6, 2), round((snap["bytes"] - prev_rx) * 8 / 1e6, 2), 0.0])
-        prev_tx, prev_rx = tx, snap["bytes"]
-    ctx.check_stop()
-    time.sleep(0.3)
-    fin = ctx.ask(rconn, ("collect",))
-    el = time.monotonic() - t_start
-    tx = sum(ps)
-    secs = [x * 8 / 1e6 for x in ps[:-1]] or [tx * 8 / 1e6 / max(el, 1)]
-    if not opened[0]:
-        raise RuntimeError("no TCP connection could be opened: " + (errs[0] if errs else "unknown error"))
-    return {"streams": streams, "opened": opened[0], "errors": len(errs), "error_msg": errs[0] if errs else "",
-            "tx_bytes": tx, "rx_bytes": fin["bytes"], "duration": round(el, 1),
-            "tx_mbps": round(tx * 8 / el / 1e6, 2), "rx_mbps": round(fin["bytes"] * 8 / el / 1e6, 2),
-            "peak_mbps": round(max(secs), 2), "resets": fin["resets"]}
+        time.sleep(0.05)
+        now = time.monotonic()
+        if now >= nxt:
+            with lock:
+                conn.send(("tick", st["bytes"]))
+            nxt += 1
+        if conn.poll() and conn.recv() == "stop":
+            stop.set()
+    for t in ths:
+        t.join(2)
+    with lock:
+        st["elapsed"] = time.monotonic() - t0
+        conn.send(("done", dict(st)))
+
+
+def tcp_trial(ctx, streams, dur, series=None):
+    streams = max(1, min(streams, MAX_STREAMS * 4))
+    nproc = min(streams, CPUS)
+    _pr, rconn = ctx.tcp_rx()
+    ctx.ask(rconn, ("arm", {"mode": "stream"}))
+    ports = [ctx.base + i for i in range(MAX_STREAMS)]
+    counts = [streams // nproc + (1 if i < streams % nproc else 0) for i in range(nproc)]
+    pipes, procs, first = [], [], 0
+    for n in counts:
+        a, b = CTX.Pipe()
+        pr = CTX.Process(target=_tcp_tx, args=(b, ctx.src, ctx.dst, ports, n, dur, first), daemon=True)
+        pr.start()
+        pipes.append(a)
+        procs.append(pr)
+        first += n
+    hist = [[] for _ in range(nproc)]
+    done = [None] * nproc
+
+    def build(snap, live):
+        out = []
+        ps = (snap or {}).get("persec") or []
+        kmax = min(len(h) for h in hist) if live else max(len(h) for h in hist)
+        for k in range(kmax):
+            if live and k >= len(ps) - 1:
+                break
+            tx = sum((h[k] - (h[k - 1] if k else 0)) for h in hist if k < len(h))
+            rx = ps[k][1] if k < len(ps) else 0
+            out.append([k + 1, round(tx * 8 / 1e6, 2), round(rx * 8 / 1e6, 2), 0.0])
+        while not live and len(out) > 1 and out[-1][1] == 0:
+            out.pop()
+        return out
+
+    try:
+        while any(d is None for d in done):
+            if ctx.stop.is_set():
+                for a in pipes:
+                    try:
+                        a.send("stop")
+                    except OSError:
+                        pass
+                raise Stopped()
+            time.sleep(1.0)
+            for i, a in enumerate(pipes):
+                msgs, eof = _drain(a)
+                for m in msgs:
+                    if m[0] == "tick":
+                        hist[i].append(m[1])
+                    elif m[0] == "done":
+                        done[i] = m[1]
+                        hist[i].append(m[1]["bytes"])
+                if eof and done[i] is None:
+                    done[i] = {"bytes": 0, "opened": 0, "errors": 1, "msg": "sender process stopped unexpectedly", "elapsed": 0}
+            if series is not None:
+                series[:] = build(ctx.ask(rconn, ("snap",)), True)
+        time.sleep(0.3)
+        fin = ctx.ask(rconn, ("collect",))
+    finally:
+        for pr in procs:
+            if pr.is_alive():
+                pr.terminate()
+    if series is not None:
+        series[:] = build(fin, False)
+    opened = sum(d["opened"] for d in done)
+    errs = sum(d["errors"] for d in done)
+    if not opened:
+        raise RuntimeError("no TCP connection could be opened: " + (next((d["msg"] for d in done if d["msg"]), "") or "unknown error"))
+    tx = sum(d["bytes"] for d in done)
+    el = max(d["elapsed"] for d in done) or dur
+    rxs = [x[2] for x in (series or [])]
+    return {"streams": streams, "processes": nproc, "opened": opened, "errors": errs,
+            "error_msg": next((d["msg"] for d in done if d["msg"]), ""), "tx_bytes": tx, "rx_bytes": fin["bytes"],
+            "duration": round(el, 1), "tx_mbps": round(tx * 8 / el / 1e6, 2), "rx_mbps": round(fin["bytes"] * 8 / el / 1e6, 2),
+            "peak_mbps": round(max(rxs or [0]), 2), "resets": fin["resets"]}
 
 
 def cps_trial(ctx, rate, dur, req, resp, hold_ms, rst, series=None):
@@ -744,12 +858,14 @@ def cps_trial(ctx, rate, dur, req, resp, hold_ms, rst, series=None):
                 raise Stopped()
             time.sleep(1.0)
             for i, a in enumerate(pipes):
-                while a.poll():
-                    m = a.recv()
+                msgs, eof = _drain(a)
+                for m in msgs:
                     if m[0] == "tick":
                         cum[i] = m[1:]
                     elif m[0] == "done":
                         done[i] = m[1]
+                if eof and done[i] is None:
+                    done[i] = {"counts": {}, "lat": []}
             att, est, fl = (sum(c[k] for c in cum) for k in range(3))
             active = sum(c[3] for c in cum)
             sec_i += 1
@@ -785,7 +901,7 @@ def line_pps(size, link_mbps):
 
 
 def streams_for(pps):
-    return max(1, min(MAX_STREAMS, int(math.ceil(pps / 50000.0))))
+    return max(1, min(STREAM_CAP, int(math.ceil(pps / 50000.0))))
 
 
 def rfc2544(ctx, p, st):
@@ -853,6 +969,54 @@ def rfc2544(ctx, p, st):
     return {"throughput": rows_tp, "frame_loss": rows_fl}
 
 
+# ------------------------------------------------------------ warnings / monitoring
+def plan_warnings(kind, p):
+    """Warnings shown before a test starts: things that will limit the result or load the LXC."""
+    w = []
+    cores = "%d CPU core%s" % (CPUS, "" if CPUS == 1 else "s")
+    if kind == "udp":
+        pps = float(p["rate_mbps"]) * 1e6 / ((int(p["payload"]) + 28) * 8)
+        need = int(math.ceil(pps / 50000.0))
+        if need > STREAM_CAP:
+            w.append("%.0f Mbit/s with %d-byte packets is about %d packets/s and needs roughly %d stream(s); this LXC has %s and allows %d. "
+                     "The sender will probably not reach the target rate (the result is then marked 'limited by sender'). Add CPU cores to the LXC or lower the rate."
+                     % (p["rate_mbps"], p["payload"], pps, need, cores, STREAM_CAP))
+        elif CPUS <= 2 and p["rate_mbps"] > 300:
+            w.append("At %.0f Mbit/s the sender and receiver processes keep this LXC (%s) very busy; the GUI may react more slowly. 4 cores are recommended above 300 Mbit/s." % (p["rate_mbps"], cores))
+    elif kind == "tcp":
+        if CPUS <= 2:
+            w.append("TCP throughput is CPU-bound: this LXC has %s, so expect roughly 1 Gbit/s at best and a busy CPU. 4 cores are recommended." % cores)
+    elif kind == "cps":
+        top = float(p["rate"]) + (float(p["step"]) * (int(p["steps"]) - 1) if p.get("ramp") else 0)
+        workers = min(int(math.ceil(top / 3000.0)), CPUS, 8)
+        if top > workers * 4000:
+            w.append("%.0f connections/s needs more than the %d worker process(es) this LXC (%s) allows (about 4000 conn/s each). The result will be marked 'limited by sender'." % (top, workers, cores))
+        conc = top * int(p["hold_ms"]) / 1000.0
+        if conc > 20000:
+            w.append("About %d connections will be open at the same time. This can fill the FortiGate session table and affects other users of that firewall." % conc)
+    elif kind == "rfc2544":
+        small = [x for x in p["sizes"] if x < 256]
+        if small and float(p["link_mbps"]) >= 500:
+            w.append("Frames below 256 bytes at %.0f Mbit/s need hundreds of thousands to over a million packets per second, which this Python tester cannot generate on %s. "
+                     "Those rows will be marked 'limited by sender' and do not show the FortiGate's limit." % (p["link_mbps"], cores))
+        trials = len(p["sizes"]) * (8 + (6 if p.get("frame_loss") else 0))
+        mins = trials * float(p["trial_s"]) / 60.0
+        if mins > 20:
+            w.append("This RFC 2544 run can take about %d minutes (%d sizes x ~%d trials x %gs). Use fewer sizes or a shorter trial length for a quick test." % (mins, len(p["sizes"]), trials // len(p["sizes"]), p["trial_s"]))
+        if CPUS <= 2 and float(p["link_mbps"]) > 300:
+            w.append("%s cores: the LXC will be very busy during this test and the GUI may react more slowly." % CPUS)
+    return w
+
+
+def _cpu_stat():
+    try:
+        with open("/proc/stat") as f:
+            v = [int(x) for x in f.readline().split()[1:]]
+        return sum(v), v[3] + (v[4] if len(v) > 4 else 0)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 # ------------------------------------------------------------ runner
 class Runner:
     def __init__(self):
@@ -865,7 +1029,7 @@ class Runner:
     def _blank():
         return {"running": False, "kind": None, "phase": "", "step": 0, "steps": 0, "started": None, "finished": None,
                 "params": None, "series": [], "result": None, "rows": [], "rows2": [], "log": [], "error": None,
-                "stopped": False, "mode": None}
+                "stopped": False, "mode": None, "warnings": [], "cpu": None, "cpu_peak": None, "cores": CPUS}
 
     @property
     def running(self):
@@ -878,6 +1042,7 @@ class Runner:
         s["now"] = time.time()
         s["series"] = list(s["series"])
         s["rows"], s["rows2"], s["log"] = list(s["rows"]), list(s["rows2"]), list(s["log"])[-40:]
+        s["warnings"] = list(s["warnings"])
         return s
 
     def stop(self):
@@ -889,13 +1054,32 @@ class Runner:
                 raise ValueError("A throughput test is already running.")
             self.stop_evt = threading.Event()
             self.st = self._blank()
-            self.st.update({"running": True, "kind": kind, "params": p, "started": time.time(), "mode": p["rx"].get("mode")})
+            self.st.update({"running": True, "kind": kind, "params": p, "started": time.time(), "mode": p["rx"].get("mode"),
+                            "warnings": plan_warnings(kind, p)})
             self.thread = threading.Thread(target=self._run, args=(kind, p, logdir), daemon=True)
             self.thread.start()
+
+    def _monitor(self, st, done):
+        """Sample LXC CPU use once a second; warn when it stays saturated."""
+        prev, hot = _cpu_stat(), 0
+        while prev and not done.wait(1.0):
+            cur = _cpu_stat()
+            if not cur or cur[0] <= prev[0]:
+                continue
+            pc = 100.0 * (1 - (cur[1] - prev[1]) / float(cur[0] - prev[0]))
+            prev = cur
+            st["cpu"] = round(pc)
+            st["cpu_peak"] = max(st["cpu_peak"] or 0, round(pc))
+            hot = hot + 1 if pc >= 92 else 0
+            if hot == 3 and "CPU saturated" not in " ".join(st["warnings"]):
+                st["warnings"].append("CPU saturated (%d%%): the result may be limited by this LXC instead of the network. "
+                                      "Lower the rate or streams, or give the LXC more CPU cores." % pc)
 
     def _run(self, kind, p, logdir):
         st = self.st
         ctx = Ctx(p, self.stop_evt, st)
+        mon_done = threading.Event()
+        threading.Thread(target=self._monitor, args=(st, mon_done), daemon=True).start()
         try:
             st["phase"] = "preparing receiver"
             ctx.up()
@@ -926,13 +1110,14 @@ class Runner:
         except Exception as e:  # noqa
             st["error"] = str(e)
         finally:
+            mon_done.set()
             ctx.down()
             st["finished"], st["running"] = time.time(), False
             if logdir and (st["result"] or st["rows"]):
                 try:
                     os.makedirs(logdir, exist_ok=True)
                     with open(os.path.join(logdir, "throughput.jsonl"), "a") as f:
-                        f.write(json.dumps({k: st[k] for k in ("kind", "params", "started", "finished", "result", "rows", "rows2", "stopped")}) + "\n")
+                        f.write(json.dumps({k: st[k] for k in ("kind", "params", "started", "finished", "result", "rows", "rows2", "stopped", "warnings", "cpu_peak", "cores")}) + "\n")
                 except OSError:
                     pass
 

@@ -260,6 +260,8 @@ def tp_params(kind, body, cfg):
                  req=_num(body, "req", 0, 65000, 0, int), resp=_num(body, "resp", 0, 65000, 0, int),
                  hold_ms=_num(body, "hold_ms", 0, 60000, 0, int), close="fin" if body.get("close") == "fin" else "rst",
                  max_fail_pct=_num(body, "max_fail_pct", 0, 100, 0.1))
+        if (p["rate"] + (p["step"] * (p["steps"] - 1) if p["ramp"] else 0)) * p["hold_ms"] / 1000.0 > 100000:
+            raise ValueError("Rate x hold time would keep more than 100000 connections open at once. Lower the rate or the hold time.")
         if p["req"] == 0 and p["resp"] > 0:
             raise ValueError("A response size needs a request size greater than 0.")
     elif kind == "rfc2544":
