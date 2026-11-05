@@ -57,6 +57,12 @@ canvas{width:100%;height:190px;display:block}
 .tip::after{content:attr(data-tip);display:none;position:absolute;z-index:30;left:-8px;bottom:calc(100% + 8px);width:260px;padding:9px 11px;border-radius:8px;background:var(--ink);color:#fff;font:400 12px/1.45 Geist,ui-sans-serif,system-ui,sans-serif;letter-spacing:0;text-transform:none;white-space:normal;text-align:left;box-shadow:0 6px 18px rgba(0,0,0,.18)}
 .tip.r::after{left:auto;right:-8px}.tip.d::after{bottom:auto;top:calc(100% + 8px)}
 .tip:hover::after,.tip:focus::after{display:block}
+.dg{width:100%;height:auto;display:block;margin-bottom:12px}
+.dg .lx{fill:#fff;stroke:#da291c;stroke-width:2}.dg .fw{fill:#0f1012}.dg .cl{fill:#f4f4f5;stroke:#e3e3e6;stroke-width:1.5}
+.dg text{font:600 11px Geist,ui-sans-serif,system-ui,sans-serif;fill:#0f1012;text-anchor:middle}.dg .sm{font-weight:400;font-size:9.5px;fill:#6a6e76}.dg .wt{fill:#fff}
+.dg .ar{stroke:#da291c;stroke-width:2;fill:none;marker-end:url(#ah)}.dg .ar2{stroke:#0f1012;stroke-width:2;fill:none;marker-end:url(#ah2)}
+.flows{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:6px}.flows .card{display:flex;flex-direction:column;margin:0}.flows p{margin:0 0 14px;color:var(--mute)}.flows .go{margin-top:auto;align-self:flex-start}
+.steps{margin:0;padding-left:20px}.steps li{margin:6px 0}
 .msg.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
 .grp{border-bottom:1px solid var(--line);padding:10px 0}.grp:last-child{border:0}
 .grp summary{cursor:pointer;display:grid;grid-template-columns:130px 1fr 44px;gap:14px;align-items:center;list-style:none}
@@ -86,7 +92,20 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
 </nav>
 <main>
 <section id="p-dash">
- <h1>Dashboard</h1><p class="sub">Start a test and follow the traffic live. Compare it with the logs and dashboards on your FortiGate.</p>
+ <h1>Welcome to Traffic-Gen</h1><p class="sub">Traffic-Gen generates realistic user traffic from this LXC to monitor and test a FortiGate: Application Control, web filtering, SD-WAN, antivirus and IPS efficacy, and bandwidth. Everything is controlled from this web interface.</p>
+ <div class="grid flows">
+  <div class="card"><svg class="dg" viewBox="0 0 330 120" role="img" aria-label="Traffic flows from the LXC through the FortiGate to the internet"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#da291c"/></marker><marker id="ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#0f1012"/></marker></defs><rect class="lx" x="6" y="28" width="86" height="64" rx="8"/><text x="49" y="54">Traffic-Gen</text><text class="sm" x="49" y="70">many source IPs</text><path class="ar" d="M96 60H124"/><rect class="fw" x="128" y="28" width="64" height="64" rx="8"/><text class="wt" x="160" y="64">FortiGate</text><path class="ar" d="M196 60H224"/><rect class="cl" x="228" y="28" width="96" height="64" rx="32"/><text x="276" y="54">Internet</text><text class="sm" x="276" y="70">Netflix · Teams</text><text class="sm" x="276" y="83">Microsoft 365</text></svg><h3 style="margin:0 0 6px;font-size:16px">Traffic test</h3><p>Realistic user traffic from many source IPs: Netflix, YouTube, Teams, Microsoft 365, Facebook and more. Compare it with the FortiGate logs and dashboards.</p><button class="sec go" data-go="mix">Open Traffic mix</button></div>
+  <div class="card"><svg class="dg" viewBox="0 0 330 120" role="img" aria-label="Test files and DNS lookups pass through the FortiGate; blocked or missed is counted"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#da291c"/></marker><marker id="ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#0f1012"/></marker></defs><rect class="lx" x="6" y="28" width="86" height="64" rx="8"/><text x="49" y="54">Traffic-Gen</text><text class="sm" x="49" y="70">EICAR · IOC DNS</text><path class="ar" d="M96 60H124"/><rect class="fw" x="128" y="28" width="64" height="64" rx="8"/><text class="wt" x="160" y="64">FortiGate</text><path class="ar" d="M196 60H224"/><rect class="cl" x="228" y="28" width="96" height="64" rx="32"/><text x="276" y="54">Test targets</text><text class="sm" x="276" y="70">WICAR · botnet DNS</text><rect x="118" y="98" width="84" height="16" rx="8" fill="#16a34a"/><text class="wt" x="160" y="109.5" style="font-size:9.5px">blocked / missed</text></svg><h3 style="margin:0 0 6px;font-size:16px">Security efficacy</h3><p>Harmless EICAR/WICAR files and botnet-style DNS lookups. The tool counts what the FortiGate blocks and what it misses, and shows the detection rate.</p><button class="sec go" data-go="mix">Open Traffic mix</button></div>
+  <div class="card"><svg class="dg" viewBox="0 0 330 120" role="img" aria-label="Sender on eth1 sends through the FortiGate to the receiver on eth2"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#da291c"/></marker><marker id="ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#0f1012"/></marker></defs><rect class="lx" x="6" y="28" width="86" height="64" rx="8"/><text x="49" y="54">Sender</text><text class="sm" x="49" y="70">eth1</text><path class="ar2" d="M96 60H124"/><rect class="fw" x="128" y="28" width="64" height="64" rx="8"/><text class="wt" x="160" y="64">FortiGate</text><path class="ar2" d="M196 60H224"/><rect class="lx" x="228" y="28" width="86" height="64" rx="8" style="stroke:#0f1012"/><text x="271" y="54">Receiver</text><text class="sm" x="271" y="70">eth2</text><text class="sm" x="165" y="108">loss · jitter · latency · conn/s</text></svg><h3 style="margin:0 0 6px;font-size:16px">Throughput</h3><p>A sender and a receiver on two networks, with the FortiGate in between: bandwidth, packet loss, jitter, latency (UDP, TCP, RFC 2544) and connections per second.</p><button class="sec go" data-go="tp">Open Throughput</button></div>
+ </div>
+ <div class="card" style="margin-top:16px"><h2>Getting started</h2>
+  <ol class="steps"><li><b>Network:</b> add a source network on eth1 (first IP, number of IPs, FortiGate gateway) and click Apply.</li>
+  <li><b>Traffic mix:</b> choose which traffic to generate, then start the test and follow the results live.</li>
+  <li><b>Throughput</b> (optional): add a third interface (eth2) for the receiver, then measure bandwidth, packet loss and connections per second.</li></ol></div>
+</section>
+
+<section id="p-mix" class="hide">
+ <h1>Traffic mix</h1><p class="sub">Choose the traffic mix, start the test and follow the traffic live. Compare it with the logs and dashboards on your FortiGate.</p>
  <div id="dmsg" class="msg err hide"></div>
  <div class="card">
   <div class="row" style="align-items:flex-start;gap:28px">
@@ -106,14 +125,13 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <div class="card needrun hide"><h2>Per application</h2><table id="appt"></table></div>
  <div class="card needrun hide"><h2>Per source IP</h2><table id="srct"></table></div>
  <div class="card needrun hide"><h2>Latest requests</h2><div class="log" id="log"></div></div>
-</section>
 
-<section id="p-mix" class="hide">
- <h1>Traffic mix</h1><p class="sub">Decide which kind of traffic occurs and how often. A weight of 0 disables a group.</p>
+ <h2 style="margin-top:28px">Traffic mix</h2><p class="sub" style="margin-bottom:14px">Decide which kind of traffic occurs and how often. A weight of 0 disables a group.</p>
  <div id="mmsg" class="msg hide"></div>
  <div class="msg" id="mixwarn"><b>Security tests.</b> <i>Malware test</i> only uses standard, harmless test files (EICAR, WICAR); a download that the FortiGate lets through counts as <i>missed</i>. <i>IOC / botnet behaviour</i> only sends DNS queries (DGA patterns, DNS tunnelling, dynamic DNS, mining pools) and, on request, bare TCP connects, without data or downloads. Both are off by default; only enable them on networks where you are allowed to test this. The extra IOC switches are under Settings.</div>
  <div class="card" id="mixbox"></div>
  <button id="msave">Save</button>
+
 </section>
 
 <section id="p-net" class="hide">
@@ -256,7 +274,7 @@ async function poll(){
  try{const l=await api("log?n=40");$("#log").innerHTML=l.map(r=>`<div><span class=mute>${esc(r.ts)}</span> ${esc(r.src)} <b>${esc(r.app)}</b> <span class="${r.result==="ok"?"ok":(r.result==="blocked"||r.result==="reached")?"warn":"bad"}">${esc(r.result)}${r.status?" "+r.status:""}</span> <span class=mute>${esc(r.url)}${r.ms?" · "+r.ms+" ms":""}</span></div>`).join("")}catch(e){}
 }
 function drawChart(ser){
- const cv=$("#chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;
+ const cv=$("#chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(!w)return;cv.width=w*dpr;cv.height=h*dpr;
  const g=cv.getContext("2d");g.scale(dpr,dpr);g.clearRect(0,0,w,h);const cs=getComputedStyle(document.body);
  const line=cs.getPropertyValue("--line"),mute=cs.getPropertyValue("--mute"),acc=cs.getPropertyValue("--acc");
  const A=[],B=[];for(let i=1;i<ser.length;i++){const dt=ser[i][0]-ser[i-1][0]||2;A.push((ser[i][2]-ser[i-1][2])*8/dt/1e6);B.push((ser[i][1]-ser[i-1][1])/dt)}
@@ -347,6 +365,7 @@ $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
 const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};
 $("#tp-check").onclick=async()=>{flash("#tmsg","Checking…","");try{await api("tp/config",tpPath());const r=await api("tp/check",{});flash("#tmsg",r.map(x=>(x.ok?"✔ ":"✘ ")+x.name+(x.detail?" — "+x.detail:"")).join("\n"),r.every(x=>x.ok)?"good":"err")}catch(e){flash("#tmsg",e.message,"err")}};
+$$("[data-go]").forEach(b=>b.onclick=()=>$(`nav a[data-p="${b.dataset.go}"]`).click());
 $("#tp-go").onclick=async()=>{flash("#tmsg","");try{if(tpLast&&tpLast.running)await api("tp/stop",{});else{tpSaveVals();await api("tp/config",tpPath());await api("tp/start",{kind:tpKind,params:tpParams()})}tpPoll()}catch(e){flash("#tmsg",e.message,"err")}};
 $("#tp-dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(tpLast,null,2)],{type:"application/json"}));a.download="throughput-"+(tpLast.kind||"test")+".json";a.click()};
 const f1=(v,d)=>v===null||v===undefined?"–":(+v).toFixed(d===undefined?2:d);

@@ -70,18 +70,18 @@
     "Open the web GUI on the printed URL (https://<management-ip>:8443) and sign in with the admin password.",
     "Go to Network, add a source network (interface eth1, first IP, number of IPs, FortiGate gateway) and click Apply.",
     "Go to Traffic mix and choose which groups and apps to run. The Web filter, Malware and IOC groups are off by default.",
-    "On the Dashboard pick a duration and intensity, then click Start test.",
+    "On Traffic mix pick a duration and intensity, then click Start test.",
     "Compare the dashboard and /var/log/trafficgen/requests.log with the FortiGate logs for application control, web filter, antivirus and botnet events.",
     "For bandwidth and packet-loss tests open Throughput, choose the sender network, pick the receiver interface (eth2) and set its IP and gateway in a different network, run Check environment and start a UDP, TCP, RFC 2544 or connections-per-second test."
   ],
   "screenshots": [
     {
       "file": "01-dashboard.png",
-      "caption": "Dashboard with live throughput, per-application and per-source results, and the malware detection rate."
+      "caption": "Dashboard: welcome page with a short explanation and the three test flows."
     },
     {
       "file": "02-traffic-mix.png",
-      "caption": "Traffic mix: weight per group and per-app switches."
+      "caption": "Traffic mix: start the traffic test, follow results live (including the malware detection rate) and set the mix per group."
     },
     {
       "file": "03-network.png",
