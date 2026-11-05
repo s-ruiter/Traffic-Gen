@@ -994,6 +994,11 @@ def plan_warnings(kind, p):
         conc = top * int(p["hold_ms"]) / 1000.0
         if conc > 20000:
             w.append("About %d connections will be open at the same time. This can fill the FortiGate session table and affects other users of that firewall." % conc)
+        avail = mem_available_mb()
+        est = conc * 6 / 1024.0          # rough: both ends of a connection, in this LXC
+        if avail and est > 0.5 * avail:
+            w.append("Holding about %d connections open needs roughly %d MB of memory (both ends run in this LXC) and only %d MB is available. "
+                     "Give the LXC more memory or lower the rate or hold time." % (conc, est, avail))
     elif kind == "rfc2544":
         small = [x for x in p["sizes"] if x < 256]
         if small and float(p["link_mbps"]) >= 500:
@@ -1006,6 +1011,17 @@ def plan_warnings(kind, p):
         if CPUS <= 2 and float(p["link_mbps"]) > 300:
             w.append("%s cores: the LXC will be very busy during this test and the GUI may react more slowly." % CPUS)
     return w
+
+
+def mem_available_mb():
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def _cpu_stat():
