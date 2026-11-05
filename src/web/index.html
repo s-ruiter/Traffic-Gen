@@ -63,7 +63,7 @@ canvas{width:100%;height:190px;display:block}
 .dg .ar{stroke:#da291c;stroke-width:2;fill:none;marker-end:url(#ah)}.dg .ar2{stroke:#0f1012;stroke-width:2;fill:none;marker-end:url(#ah2)}
 .flows{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:6px}.flows .card{display:flex;flex-direction:column;margin:0}.flows p{margin:0 0 14px;color:var(--mute)}.flows .go{margin-top:auto;align-self:flex-start}
 .steps{margin:0;padding-left:20px}.steps li{margin:6px 0}
-.msg.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+input:disabled,select:disabled{opacity:.5;cursor:not-allowed;background:#f4f4f5}.msg.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
 .grp{border-bottom:1px solid var(--line);padding:10px 0}.grp:last-child{border:0}
 .grp summary{cursor:pointer;display:grid;grid-template-columns:130px 1fr 44px;gap:14px;align-items:center;list-style:none}
 .grp summary::-webkit-details-marker{display:none}
@@ -356,13 +356,17 @@ let tpInit=false;let tpKind="udp",tpCfg=null,tpLast=null,tpVals={};
 function tpForm(){
  $("#tp-kinds").innerHTML=["udp","tcp","rfc2544","cps","concurrent"].map(k=>[k,TP[k]]).map(([k,v])=>`<span class="chip ${k===tpKind?"on":""}" data-k="${k}">${v.n}</span>`).join("");
  $$("#tp-kinds .chip").forEach(c=>c.onclick=()=>{if(tpLast&&tpLast.running)return;tpSaveVals();tpKind=c.dataset.k;tpForm()});
- $("#tp-desc").textContent=TP[tpKind].d;
+ $("#tp-desc").textContent=TP[tpKind].d;setTimeout(()=>{$$("#tp-form [data-tk]").forEach(e=>{e.onchange=tpDeps;e.oninput=tpDeps});tpDeps()},0);
  $("#tp-form").innerHTML=TP[tpKind].f.map(([k,l,d,t,o])=>{const v=(tpVals[tpKind]||{})[k]!==undefined?tpVals[tpKind][k]:d;
   return `<div><label class="f">${l}${tipH(tpKind,k)}</label>`+(t==="bool"?`<select data-tk="${k}"><option value="0" ${v?"":"selected"}>No</option><option value="1" ${v?"selected":""}>Yes</option></select>`:
    t==="sel"?`<select data-tk="${k}">${o.map(x=>`<option ${x===v?"selected":""}>${x}</option>`).join("")}</select>`:`<input data-tk="${k}" value="${esc(v)}">`)+`</div>`}).join("")}
+function tpDeps(){const run=!!(tpLast&&tpLast.running);if(tpKind!=="cps"||run)return;
+ const g=k=>document.querySelector(`#tp-form [data-tk="${k}"]`);
+ if(g("ramp")){const on=g("ramp").value==="1";["step","steps"].forEach(k=>{if(g(k))g(k).disabled=!on})}
+ if(g("req")&&g("resp"))g("resp").disabled=!(+g("req").value>0)}
 function tpSaveVals(){const o={};$$("#tp-form [data-tk]").forEach(e=>o[e.dataset.tk]=e.value);tpVals[tpKind]=o}
 function tpParams(){const o={};$$("#tp-form [data-tk]").forEach(e=>{const k=e.dataset.tk,f=TP[tpKind].f.find(x=>x[0]===k),t=f[3];
- o[k]=t==="bool"?e.value==="1":t==="sel"?e.value:k==="sizes"?e.value.split(",").map(x=>+x.trim()).filter(Boolean):e.value.trim()===""?"":+e.value});return o}
+ if(e.disabled)return;o[k]=t==="bool"?e.value==="1":t==="sel"?e.value:k==="sizes"?e.value.split(",").map(x=>+x.trim()).filter(Boolean):e.value.trim()===""?"":+e.value});if(tpKind==="cps"&&!o.req)o.resp=0;return o}
 async function loadTp(){tpCfg=await api("tp/config");const t=tpCfg.throughput,rx=t.rx;
  $("#tp-tx").innerHTML=tpCfg.networks.map(n=>`<option ${n.name===t.tx_network?"selected":""}>${esc(n.name)}</option>`).join("")||"<option value=''>(add a source network first)</option>";
  $("#tp-mode").value=rx.mode;tpParents(rx.parent);$("#tp-ip").value=rx.ip||"";$("#tp-prefix").value=rx.prefix||24;$("#tp-gw").value=rx.gateway||"";$("#tp-count").value=rx.count||1;$("#tp-port").value=t.base_port;
@@ -396,7 +400,7 @@ async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
  tpInit=true;tpLast=s;const run=s.running,k=s.kind||tpKind,r=s.result,ser=s.series||[];
  $("#tp-go").disabled=!run&&tpBlocked;$("#tp-check").disabled=tpBlocked;$("#tp-go").textContent=run?"Stop test":"Start test";$("#tp-go").className="big"+(run?" danger":"");$("#tp-pill").className="pill"+(run?" run":"");$("#tp-pill").textContent=run?"Running":(s.error?"Failed":s.stopped?"Stopped":s.finished?"Finished":"Idle");
  $("#tp-phase").textContent=s.phase?(s.steps>1?"step "+Math.min(s.step||s.rows.length+1,s.steps)+"/"+s.steps+" · ":"")+s.phase+(s.mode==="loopback"?" · loopback self-test":""):"";
- $$("#tp-kinds .chip").forEach(c=>c.style.pointerEvents=run?"none":"");$$("#tp-form [data-tk]").forEach(e=>e.disabled=run);
+ $$("#tp-kinds .chip").forEach(c=>c.style.pointerEvents=run?"none":"");$$("#tp-form [data-tk]").forEach(e=>e.disabled=run);tpDeps();
  if(s.error)flash("#tmsg",s.error,"err");
  const el=s.started?(s.finished||s.now)-s.started:0;$("#tp-bar").style.width=run?"100%":"0";
  $("#tp-dl").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));$("#tp-pdf").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));
