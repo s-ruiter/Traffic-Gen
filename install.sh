@@ -133,10 +133,10 @@ pct exec "$CTID" -- ping -c1 -W2 deb.debian.org &>/dev/null || die "LXC has no i
 
 # --- provision ---------------------------------------------------------------
 echo ">> Installing packages"
-pct exec "$CTID" -- bash -c 'export LC_ALL=C LANG=C DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml iproute2 iputils-ping iputils-arping openssl logrotate ca-certificates >/dev/null'
+pct exec "$CTID" -- bash -c 'export LC_ALL=C LANG=C DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 python3-yaml util-linux iproute2 iputils-ping iputils-arping openssl logrotate ca-certificates >/dev/null'
 
 pct exec "$CTID" -- mkdir -p /opt/trafficgen/web /etc/trafficgen/tls /var/log/trafficgen /var/lib/trafficgen
-for f in trafficgen.py netconf.py webui.py profiles.yaml; do
+for f in trafficgen.py netconf.py webui.py throughput.py profiles.yaml; do
   pct push "$CTID" "$HERE/src/$f" "/opt/trafficgen/$f" --perms 644
 done
 for f in index.html favicon.svg; do

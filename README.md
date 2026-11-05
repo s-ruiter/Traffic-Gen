@@ -39,7 +39,23 @@ curl -fsSL https://raw.githubusercontent.com/s-ruiter/Traffic-Gen/main/update.sh
 - **Dashboard**: duration (5 min to 2 hours, until stopped, or custom), intensity, sessions per IP, start/stop, live throughput, requests, blocked/errors, per application and per source IP, latest requests.
 - **Traffic mix**: weight per group (Microsoft 365, Collaboration, Streaming, Social, SaaS, Web, Updates, Downloads, SD-WAN probes, Web filter test, Malware, IOC) and per-app on/off.
 - **Network**: per source network the interface (eth1), optional VLAN, first IP, prefix, number of IPs, gateway and DNS. *Apply* creates the VLAN sub-interface, adds the IPs and sets up source-based routing, so test traffic goes through its own gateway (the FortiGate) and management stays separate. *Test connection* pings the gateway and tests DNS from the source network.
+- **Throughput**: bandwidth, packet loss (UDP, TCP, RFC 2544) and connections-per-second tests between two networks.
 - **Settings**: change password, verify TLS certificates of target sites (off by default, for SSL deep inspection) and the IOC switches.
+
+## Throughput, packet loss and connections per second
+
+The **Throughput** page turns the LXC into a small bandwidth tester (up to about 1 Gbit/s, meant for relatively small tests). A sender on one of your source networks sends traffic *through the FortiGate* to a receiver on a second network, and the receiver checks everything that arrives:
+
+- **UDP stream**: fixed rate, packet size and duration. Reports packet loss, reordering, duplicates, throughput, jitter and one-way latency, with a pass/fail on the loss you allow.
+- **TCP throughput**: parallel streams, goodput measured at the receiver.
+- **RFC 2544**: throughput (binary search for the highest rate within your loss tolerance), optional frame loss rate and latency at the throughput rate, for the standard frame sizes 64 to 1518 bytes.
+- **Connections per second**: TCP connections at a set rate, optionally ramped up in steps, with optional request/response payload and hold time. Reports established/failed connections, achieved rate and connect latency, and the highest sustained rate.
+
+Setup (**Throughput > Path**): pick the sender network (the first IP of a network from the Network page, which must be applied) and describe the receiver: interface or VLAN, receiver IP, prefix and gateway. The receiver must be in a *different* network than the sender, so the traffic crosses the FortiGate. It lives in its own network namespace on a VLAN/macvlan interface of the chosen NIC (for example eth1 with another VLAN, or an extra NIC such as eth2 that you add to the LXC in Proxmox) and is created only while a test runs. Allow UDP and TCP on ports 5201-5208 (configurable base port) from the sender network to the receiver IP in the FortiGate policy. *Check environment* verifies the setup and the gateway.
+
+The *Loopback self-test* mode runs both ends on 127.0.0.1 to test the tool itself.
+
+Notes: the tester is written in Python, so a single LXC reaches roughly 0.1 to 1 Gbit/s depending on packet size and CPU cores. Small frames (64 bytes) are limited by packets per second, and such results are marked "limited by sender" instead of being reported as network loss. Throughput and CPU of the Proxmox host and bridge are part of the path being measured. Only one test (traffic or throughput) runs at a time. Results are also appended to `/var/log/trafficgen/throughput.jsonl`.
 
 ## Proxmox notes
 

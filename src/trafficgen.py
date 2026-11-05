@@ -51,6 +51,11 @@ DEFAULT_CONFIG = {
     "ioc_feeds": False,            # fetch the Feodo C2 IP list (used only as DNS/connect targets)
     "ioc_connect": False,          # allow bare TCP connects to IOC IPs/ports (no payload is sent)
     "block_ips": ["208.91.112.55"],  # DNS answers that mean "FortiGuard block portal"
+    "throughput": {                # bandwidth / packet-loss / CPS tester (see throughput.py)
+        "tx_network": "",          # name of the source network the sender uses
+        "base_port": 5201,         # UDP/TCP ports base..base+7 on the receiver
+        "rx": {"mode": "isolated", "parent": "eth1", "vlan": "", "ip": "", "prefix": 24, "gateway": ""},
+    },
     "groups": {                    # relative weights of traffic groups; 0 = off
         "office365": 25, "collab": 20, "streaming": 20, "social": 10,
         "saas": 10, "web": 10, "updates": 3, "download": 2, "sdwan": 5,

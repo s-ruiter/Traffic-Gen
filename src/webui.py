@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 import netconf
+import throughput as tp
 import trafficgen as tg
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +25,7 @@ AUTH_FILE = os.environ.get("TRAFFICGEN_AUTH", "/etc/trafficgen/auth.json")
 CERT = "/etc/trafficgen/tls/server.crt"
 KEY = "/etc/trafficgen/tls/server.key"
 SESSION_TTL = 12 * 3600
-VERSION = "2.1"
+VERSION = "2.2"
 
 
 # ----------------------------------------------------------------- auth
@@ -132,7 +133,7 @@ class Controller:
 
     def start(self, p):
         with self.lock:
-            if self.running:
+            if self.running or TP.running:
                 raise ValueError("A test is already running.")
             cfg = tg.load_config()
             for k in ("duration_minutes", "threads_per_ip"):
@@ -178,6 +179,98 @@ class Controller:
 
 
 CTRL = Controller()
+TP = tp.Runner()
+
+
+def _net_of(ip, prefix):
+    import ipaddress
+    return ipaddress.ip_network("%s/%d" % (ip, int(prefix)), strict=False)
+
+
+def tp_validate_path(body, cfg):
+    """Validate/normalise the throughput path settings (sender network + receiver)."""
+    import ipaddress
+    out = {"tx_network": str(body.get("tx_network", "")).strip(), "base_port": int(body.get("base_port", 5201))}
+    if not 1024 <= out["base_port"] <= 65000:
+        raise ValueError("Base port must be between 1024 and 65000.")
+    rx = body.get("rx") or {}
+    mode = rx.get("mode", "isolated")
+    if mode not in ("isolated", "loopback"):
+        raise ValueError("Receiver mode must be 'isolated' or 'loopback'.")
+    out["rx"] = {"mode": mode, "parent": "", "vlan": "", "ip": "", "prefix": 24, "gateway": ""}
+    if mode == "loopback":
+        return out
+    parent = str(rx.get("parent", "")).strip()
+    names = {i["name"] for i in netconf.interfaces()}
+    if not parent or parent == cfg["mgmt_interface"] or "." in parent or parent not in names:
+        raise ValueError("Receiver interface '%s' is invalid, missing or the management interface." % parent)
+    vlan = str(rx.get("vlan", "")).strip()
+    if vlan and not 1 <= int(vlan) <= 4094:
+        raise ValueError("Receiver VLAN must be between 1 and 4094.")
+    try:
+        ip = str(ipaddress.IPv4Address(str(rx.get("ip", "")).strip()))
+        prefix = int(rx.get("prefix", 24))
+        net = _net_of(ip, prefix)
+        gw = str(rx.get("gateway", "")).strip()
+        if gw and ipaddress.IPv4Address(gw) not in net:
+            raise ValueError("Receiver gateway must be inside %s." % net)
+    except ipaddress.AddressValueError as e:
+        raise ValueError("Receiver address is invalid: %s" % e)
+    if not 8 <= prefix <= 30:
+        raise ValueError("Receiver prefix must be between 8 and 30.")
+    for n in cfg["networks"]:
+        if net.overlaps(_net_of(n["first"], n["prefix"])):
+            raise ValueError("Receiver network %s overlaps with source network '%s'; it must be a different network so traffic crosses the FortiGate." % (net, n.get("name")))
+    mnet = netconf.mgmt_network(cfg["mgmt_interface"])
+    if mnet and net.overlaps(mnet):
+        raise ValueError("Receiver network %s overlaps with the management network." % net)
+    out["rx"].update({"parent": parent, "vlan": int(vlan) if vlan else "", "ip": ip, "prefix": prefix, "gateway": gw})
+    return out
+
+
+def _num(body, k, lo, hi, default, cast=float):
+    v = cast(body.get(k, default))
+    if not lo <= v <= hi:
+        raise ValueError("%s must be between %s and %s." % (k, lo, hi))
+    return v
+
+
+def tp_params(kind, body, cfg):
+    t = cfg["throughput"]
+    p = {"base_port": t["base_port"], "rx": t["rx"], "tx_ip": ""}
+    if t["rx"]["mode"] == "isolated":
+        n = next((x for x in cfg["networks"] if x.get("name") == t["tx_network"]), None)
+        if not n:
+            raise ValueError("Choose a sender network first (Throughput > Path).")
+        if not t["rx"]["ip"]:
+            raise ValueError("Configure the receiver first (Throughput > Path).")
+        p["tx_ip"] = n["first"]
+        if p["tx_ip"] not in netconf.live_addrs().get(netconf.dev_of(n), set()):
+            raise ValueError("Sender IP %s is not active. Click 'Apply' on the Network page first." % p["tx_ip"])
+    if kind == "udp":
+        p.update(payload=_num(body, "payload", 16, 1472, 1400, int), rate_mbps=_num(body, "rate_mbps", 1, 1000, 100),
+                 streams=_num(body, "streams", 0, 8, 0, int), duration=_num(body, "duration", 1, 3600, 10))
+    elif kind == "tcp":
+        p.update(streams=_num(body, "streams", 1, 32, 4, int), duration=_num(body, "duration", 1, 3600, 10))
+    elif kind == "cps":
+        p.update(rate=_num(body, "rate", 1, 50000, 1000), duration=_num(body, "duration", 1, 600, 10),
+                 ramp=bool(body.get("ramp")), step=_num(body, "step", 1, 50000, 500), steps=_num(body, "steps", 1, 20, 5, int),
+                 req=_num(body, "req", 0, 65000, 0, int), resp=_num(body, "resp", 0, 65000, 0, int),
+                 hold_ms=_num(body, "hold_ms", 0, 60000, 0, int), close="fin" if body.get("close") == "fin" else "rst",
+                 max_fail_pct=_num(body, "max_fail_pct", 0, 100, 0.1))
+        if p["req"] == 0 and p["resp"] > 0:
+            raise ValueError("A response size needs a request size greater than 0.")
+    elif kind == "rfc2544":
+        sizes = body.get("sizes") or [64, 512, 1518]
+        sizes = sorted({int(x) for x in sizes})
+        if not sizes or any(not 64 <= x <= 1518 for x in sizes):
+            raise ValueError("Frame sizes must be between 64 and 1518 bytes.")
+        p.update(sizes=sizes, link_mbps=_num(body, "link_mbps", 10, 1000, 1000), trial_s=_num(body, "trial_s", 1, 120, 5),
+                 loss_tol=_num(body, "loss_tol", 0, 100, 0), resolution=_num(body, "resolution", 0.1, 25, 1),
+                 frame_loss=bool(body.get("frame_loss")))
+    else:
+        raise ValueError("Unknown test type.")
+    return p
 
 
 # ----------------------------------------------------------- HTTP layer
@@ -252,6 +345,11 @@ class H(BaseHTTPRequestHandler):
                                         "mgmt_net": str(netconf.mgmt_network(cfg["mgmt_interface"]) or "")})
             if u.path == "/api/network":
                 return self._send(200, {"status": netconf.status(cfg), "log": CTRL.apply_log})
+            if u.path == "/api/tp/state":
+                return self._send(200, TP.state())
+            if u.path == "/api/tp/config":
+                return self._send(200, {"throughput": cfg["throughput"], "networks": [n.get("name") for n in cfg["networks"]],
+                                        "interfaces": [i["name"] for i in netconf.interfaces() if i["name"] != cfg["mgmt_interface"] and "." not in i["name"]]})
             if u.path == "/api/log":
                 e = CTRL.engine
                 n = int(parse_qs(u.query).get("n", ["60"])[0])
@@ -307,8 +405,26 @@ class H(BaseHTTPRequestHandler):
                     cfg["block_ips"] = [str(ipaddress.IPv4Address(str(x).strip())) for x in body["block_ips"] if str(x).strip()]
                 save_config(cfg)
                 return self._send(200, config_view(cfg))
-            if u.path == "/api/network/apply":
+            if u.path == "/api/tp/config":
+                cfg = tg.load_config()
+                cfg["throughput"] = tp_validate_path(body, cfg)
+                save_config(cfg)
+                return self._send(200, {"throughput": cfg["throughput"]})
+            if u.path == "/api/tp/start":
                 if CTRL.running:
+                    return self._send(409, {"error": "Stop the running traffic test first."})
+                cfg = tg.load_config()
+                TP.start(str(body.get("kind", "")), tp_params(str(body.get("kind", "")), body.get("params") or {}, cfg), tg.LOG_DIR)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/tp/stop":
+                TP.stop()
+                return self._send(200, {"ok": True})
+            if u.path == "/api/tp/check":
+                if TP.running or CTRL.running:
+                    return self._send(409, {"error": "Stop the running test first."})
+                return self._send(200, tp.check_env(tg.load_config()["throughput"]["rx"]))
+            if u.path == "/api/network/apply":
+                if CTRL.running or TP.running:
                     return self._send(409, {"error": "Stop the running test first."})
                 nets, errs = netconf.validate(body.get("networks", []), tg.load_config()["mgmt_interface"])
                 if errs:

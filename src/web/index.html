@@ -76,7 +76,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
 <div class="app hide" id="app">
 <nav>
  <div class="brand"><i><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></i>Traffic-Gen</div>
- <a data-p="dash" class="on">Dashboard</a><a data-p="mix">Traffic mix</a><a data-p="net">Network</a><a data-p="set">Settings</a>
+ <a data-p="dash" class="on">Dashboard</a><a data-p="mix">Traffic mix</a><a data-p="net">Network</a><a data-p="tp">Throughput</a><a data-p="set">Settings</a>
  <span class="pill st" id="pill">Idle</span>
 </nav>
 <main>
@@ -121,6 +121,37 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <div class="mute" id="nsum" style="margin-top:10px"></div>
 </section>
 
+<section id="p-tp" class="hide">
+ <h1>Throughput</h1><p class="sub">Measure bandwidth, packet loss and connections per second through the FortiGate: a sender on a source network talks to a receiver on a second network.</p>
+ <div id="tmsg" class="msg hide"></div>
+ <div class="card"><h2>Path</h2>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+   <div><label class="f">Sender network</label><select id="tp-tx"></select></div>
+   <div><label class="f">Receiver</label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Loopback self-test</option></select></div>
+   <div class="tp-iso"><label class="f">Interface</label><select id="tp-parent"></select></div>
+   <div class="tp-iso"><label class="f">VLAN (optional)</label><input id="tp-vlan" type="number" min="1" max="4094"></div>
+   <div class="tp-iso"><label class="f">Receiver IP</label><input id="tp-ip" placeholder="10.10.30.10"></div>
+   <div class="tp-iso"><label class="f">Prefix</label><input id="tp-prefix" type="number" min="8" max="30"></div>
+   <div class="tp-iso"><label class="f">Gateway (FortiGate)</label><input id="tp-gw" placeholder="10.10.30.1"></div>
+   <div><label class="f">Base port</label><input id="tp-port" type="number" min="1024" max="65000"></div>
+  </div>
+  <div class="mute" id="tp-hint" style="margin-top:10px"></div>
+  <div class="row" style="margin-top:12px"><button class="sec" id="tp-save">Save</button><button class="sec" id="tp-check">Check environment</button></div></div>
+ <div class="card"><h2>Test</h2>
+  <div class="chips" id="tp-kinds" style="margin-bottom:14px"></div>
+  <div class="grid" id="tp-form" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));align-items:end"></div>
+  <div class="mute" id="tp-desc" style="margin:12px 0"></div>
+  <div class="row"><button class="big" id="tp-go">Start test</button><span class="pill" id="tp-pill">Idle</span><span class="mute" id="tp-phase"></span></div>
+  <div class="bar" style="margin-top:14px"><i id="tp-bar" style="width:0"></i></div></div>
+ <div class="grid kpis" id="tp-kpis"></div>
+ <div class="card hide" id="tp-chartcard"><h2 id="tp-charttitle">Throughput</h2><canvas id="tp-chart"></canvas>
+  <div class="row mute" style="margin-top:6px"><span><span class="mini" style="width:14px"></span> <span id="tp-l1">sent</span></span><span><span class="mini" style="width:14px;background:#0f1012"></span> <span id="tp-l2">received</span></span></div></div>
+ <div class="card hide" id="tp-tab1"></div>
+ <div class="card hide" id="tp-tab2"></div>
+ <div class="card hide" id="tp-logcard"><h2>Progress</h2><div class="log" id="tp-log"></div></div>
+ <button class="sec hide" id="tp-dl">Download results (JSON)</button>
+</section>
+
 <section id="p-set" class="hide">
  <h1>Settings</h1><p class="sub">Security and behaviour.</p>
  <div id="smsg" class="msg hide"></div>
@@ -160,7 +191,7 @@ async function doLogin(){try{await api("login",{password:$("#lpw").value});$("#l
 $("#lbtn").onclick=doLogin;$("#lpw").onkeydown=e=>{if(e.key==="Enter")doLogin()};
 let page="dash";
 $$("nav a").forEach(a=>a.onclick=()=>{page=a.dataset.p;$$("nav a").forEach(x=>x.classList.toggle("on",x===a));
-  $$("main section").forEach(s=>s.classList.toggle("hide",s.id!=="p-"+page));if(page==="mix")loadMix();if(page==="net")loadNet();if(page==="set")loadSet()});
+  $$("main section").forEach(s=>s.classList.toggle("hide",s.id!=="p-"+page));if(page==="mix")loadMix();if(page==="net")loadNet();if(page==="set")loadSet();if(page==="tp")loadTp()});
 
 // ---- dashboard
 const DURS=[5,10,15,30,60,120,0,"x"];let dur=10,inten="medium",cfg={},last={},running=false;
@@ -181,6 +212,7 @@ async function loadCfg(){cfg=await api("config");dur=cfg.duration_minutes;inten=
 
 function kpi(l,v,c){return `<div class="kpi"><span>${l}</span><b class="${c||""}">${v}</b></div>`}
 async function poll(){
+ if(page==="tp")tpPoll();
  let s;try{s=await api("state")}catch(e){return}
  last=s;running=s.running;
  $("#pill").className="pill"+(running?" run":"");$("#pill").textContent=running?"Test running":"Idle";
@@ -255,6 +287,82 @@ function sum(){$("#nsum").textContent=`Total ${nets.reduce((a,n)=>a+(+n.count||0
 $("#addnet").onclick=()=>{const n=blank();n.parent=ifs[0]?ifs[0].name:"";nets.push(n);renderNets()};
 $("#napply").onclick=async()=>{try{const r=await api("network/apply",{networks:nets});nets=r.networks;renderNets(r.status);flash("#nmsg",r.log.join("\n"),"good")}catch(e){flash("#nmsg",e.message,"err")}};
 $("#ntest").onclick=async()=>{flash("#nmsg","Testing…","");try{const r=await api("network/test",{});flash("#nmsg",r.map(x=>`${x.name}: gateway ${x.gateway_ping?"✔":"✘ no ping"} · DNS ${x.dns?"✔":"✘ "+x.detail}`).join("\n")||"No networks.","")}catch(e){flash("#nmsg",e.message,"err")}};
+
+// ---- throughput
+const TP={udp:{n:"UDP stream",d:"Fixed-rate UDP stream with sequence numbers. Measures throughput, packet loss, reordering, duplicates, jitter and one-way latency.",
+  f:[["payload","Payload (bytes)",1400],["rate_mbps","Rate (Mbit/s)",100],["streams","Streams (0 = auto)",0],["duration","Duration (s)",10],["_loss","Pass if loss ≤ (%)",0.1]]},
+ tcp:{n:"TCP throughput",d:"Parallel TCP streams sending as fast as the path allows. Measures goodput at the receiver.",
+  f:[["streams","Streams",4],["duration","Duration (s)",10]]},
+ rfc2544:{n:"RFC 2544",d:"Throughput (binary search for the highest rate within the loss tolerance), optional frame loss rate, and latency at the throughput rate, per frame size.",
+  f:[["sizes","Frame sizes (bytes)","64,512,1518"],["link_mbps","Link rate (Mbit/s)",1000],["trial_s","Trial length (s)",5],["loss_tol","Loss tolerance (%)",0],["resolution","Resolution (% of link)",1],["frame_loss","Also run frame loss test",false,"bool"]]},
+ cps:{n:"Connections/s",d:"TCP connections per second. Optionally ramp the rate up in steps; optional request/response payload and hold time for concurrent connections.",
+  f:[["rate","Connections/s",1000],["duration","Duration per step (s)",10],["ramp","Ramp up in steps",false,"bool"],["step","Step (+conn/s)",500],["steps","Steps",5],["req","Request (bytes)",0],["resp","Response (bytes)",0],["hold_ms","Hold open (ms)",0],["close","Close","rst","sel",["rst","fin"]],["max_fail_pct","Pass if failures ≤ (%)",0.1]]}};
+let tpInit=false;let tpKind="udp",tpCfg=null,tpLast=null,tpVals={};
+function tpForm(){
+ $("#tp-kinds").innerHTML=Object.entries(TP).map(([k,v])=>`<span class="chip ${k===tpKind?"on":""}" data-k="${k}">${v.n}</span>`).join("");
+ $$("#tp-kinds .chip").forEach(c=>c.onclick=()=>{if(tpLast&&tpLast.running)return;tpSaveVals();tpKind=c.dataset.k;tpForm()});
+ $("#tp-desc").textContent=TP[tpKind].d;
+ $("#tp-form").innerHTML=TP[tpKind].f.map(([k,l,d,t,o])=>{const v=(tpVals[tpKind]||{})[k]!==undefined?tpVals[tpKind][k]:d;
+  return `<div><label class="f">${l}</label>`+(t==="bool"?`<select data-tk="${k}"><option value="0" ${v?"":"selected"}>No</option><option value="1" ${v?"selected":""}>Yes</option></select>`:
+   t==="sel"?`<select data-tk="${k}">${o.map(x=>`<option ${x===v?"selected":""}>${x}</option>`).join("")}</select>`:`<input data-tk="${k}" value="${esc(v)}">`)+`</div>`}).join("")}
+function tpSaveVals(){const o={};$$("#tp-form [data-tk]").forEach(e=>o[e.dataset.tk]=e.value);tpVals[tpKind]=o}
+function tpParams(){const o={};$$("#tp-form [data-tk]").forEach(e=>{const k=e.dataset.tk,f=TP[tpKind].f.find(x=>x[0]===k),t=f[3];
+ o[k]=t==="bool"?e.value==="1":t==="sel"?e.value:k==="sizes"?e.value.split(",").map(x=>+x.trim()).filter(Boolean):e.value.trim()===""?"":+e.value});return o}
+async function loadTp(){tpCfg=await api("tp/config");const t=tpCfg.throughput,rx=t.rx;
+ $("#tp-tx").innerHTML=tpCfg.networks.map(n=>`<option ${n===t.tx_network?"selected":""}>${esc(n)}</option>`).join("")||"<option value=''>(add a source network first)</option>";
+ $("#tp-parent").innerHTML=tpCfg.interfaces.map(n=>`<option ${n===rx.parent?"selected":""}>${esc(n)}</option>`).join("");
+ $("#tp-mode").value=rx.mode;$("#tp-vlan").value=rx.vlan||"";$("#tp-ip").value=rx.ip||"";$("#tp-prefix").value=rx.prefix||24;$("#tp-gw").value=rx.gateway||"";$("#tp-port").value=t.base_port;
+ tpMode();tpForm();tpPoll()}
+function tpMode(){const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
+ $("#tp-hint").textContent=iso?"The sender uses the first IP of the chosen source network. The receiver lives in its own network namespace on the interface/VLAN above and must be in a different network, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender network to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run on 127.0.0.1. This measures the tool itself, not the FortiGate."}
+$("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
+const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,vlan:$("#tp-vlan").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim()}});
+$("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};
+$("#tp-check").onclick=async()=>{flash("#tmsg","Checking…","");try{await api("tp/config",tpPath());const r=await api("tp/check",{});flash("#tmsg",r.map(x=>(x.ok?"✔ ":"✘ ")+x.name+(x.detail?" — "+x.detail:"")).join("\n"),r.every(x=>x.ok)?"good":"err")}catch(e){flash("#tmsg",e.message,"err")}};
+$("#tp-go").onclick=async()=>{flash("#tmsg","");try{if(tpLast&&tpLast.running)await api("tp/stop",{});else{tpSaveVals();await api("tp/config",tpPath());await api("tp/start",{kind:tpKind,params:tpParams()})}tpPoll()}catch(e){flash("#tmsg",e.message,"err")}};
+$("#tp-dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(tpLast,null,2)],{type:"application/json"}));a.download="throughput-"+(tpLast.kind||"test")+".json";a.click()};
+const f1=(v,d)=>v===null||v===undefined?"–":(+v).toFixed(d===undefined?2:d);
+function tpTable(id,title,head,rows){const e=$(id);e.classList.toggle("hide",!rows.length);if(!rows.length)return;
+ e.innerHTML="<h2>"+title+"</h2><table><tr>"+head.map(h=>`<th class="${h[1]?"n":""}">${h[0]}</th>`).join("")+"</tr>"+rows.map(r=>"<tr>"+r.map((c,i)=>`<td class="${head[i][1]?"n":""}">${c}</td>`).join("")+"</tr>").join("")+"</table>"}
+async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
+ if(!tpInit&&s.kind&&TP[s.kind]){tpInit=true;tpKind=s.kind;tpForm()}
+ tpInit=true;tpLast=s;const run=s.running,k=s.kind||tpKind,r=s.result,ser=s.series||[];
+ $("#tp-go").textContent=run?"Stop test":"Start test";$("#tp-go").className="big"+(run?" danger":"");$("#tp-pill").className="pill"+(run?" run":"");$("#tp-pill").textContent=run?"Running":(s.error?"Failed":s.stopped?"Stopped":s.finished?"Finished":"Idle");
+ $("#tp-phase").textContent=s.phase?(s.steps>1?"step "+Math.min(s.step||s.rows.length+1,s.steps)+"/"+s.steps+" · ":"")+s.phase+(s.mode==="loopback"?" · loopback self-test":""):"";
+ $$("#tp-kinds .chip").forEach(c=>c.style.pointerEvents=run?"none":"");$$("#tp-form [data-tk]").forEach(e=>e.disabled=run);
+ if(s.error)flash("#tmsg",s.error,"err");
+ const el=s.started?(s.finished||s.now)-s.started:0;$("#tp-bar").style.width=run?"100%":"0";
+ $("#tp-dl").classList.toggle("hide",!(s.finished&&(r||s.rows.length)));
+ $("#tp-logcard").classList.toggle("hide",!s.log.length);$("#tp-log").innerHTML=s.log.slice().reverse().map(x=>"<div>"+esc(x)+"</div>").join("");
+ // chart
+ const unit=k==="cps"?"conn/s":"Mbit/s";$("#tp-chartcard").classList.toggle("hide",!ser.length);
+ $("#tp-charttitle").textContent=k==="cps"?"Connections per second":"Throughput";$("#tp-l1").textContent=k==="cps"?"attempted":"sent";$("#tp-l2").textContent=k==="cps"?"established":"received";
+ if(ser.length)tpChart(ser,unit);
+ // KPIs
+ let K="";const loss=r?r.loss_pct:null;
+ if(k==="udp"&&r){const lt=+((tpVals.udp||{})._loss??0.1),ok=r.loss_pct<=lt;
+  K=kpi("Result",ok?"PASS":"FAIL",ok?"ok":"bad")+kpi("Packet loss",f1(r.loss_pct,3)+" %",ok?"ok":"bad")+kpi("Sent",fmt(r.sent)+" pkts")+kpi("Received",fmt(r.received)+" pkts")+kpi("Sent rate",f1(r.tx_mbps)+" Mbit/s")+kpi("Received rate",f1(r.rx_mbps)+" Mbit/s")+
+  kpi("Jitter",f1(r.jitter_ms,3)+" ms")+kpi("Latency avg / max",f1(r.lat_avg_ms,2)+" / "+f1(r.lat_max_ms,2)+" ms")+kpi("Reordered / dup",r.reorder+" / "+r.dup,(r.reorder||r.dup)?"warn":"")+(r.limited?kpi("Sender limit","reached","warn"):"")}
+ else if(k==="tcp"&&r)K=kpi("Throughput",f1(r.rx_mbps)+" Mbit/s")+kpi("Peak (1 s)",f1(r.peak_mbps)+" Mbit/s")+kpi("Data",fbytes(r.rx_bytes))+kpi("Streams",r.opened+"/"+r.streams)+kpi("Errors",r.errors,r.errors?"bad":"")+kpi("Resets",r.resets,r.resets?"warn":"");
+ else if(k==="cps"&&s.rows.length){const l=s.rows[s.rows.length-1];K=(r?kpi("Max sustained",fmt(r.max_ok_cps)+" conn/s",r.max_ok_cps?"ok":"bad"):"")+kpi("Established",fmt(l.established)+" / "+fmt(l.attempted))+kpi("Failed",f1(l.fail_pct,2)+" %",l.fail_pct?"bad":"ok")+kpi("Avg / peak",f1(l.avg_cps,0)+" / "+l.peak_cps+" conn/s")+kpi("Connect p50 / p95",f1(l.lat_p50_ms)+" / "+f1(l.lat_p95_ms)+" ms")+(l.limited?kpi("Sender limit","reached","warn"):"")}
+ else if(run&&ser.length){const l=ser[ser.length-1];K=kpi(k==="cps"?"Attempted/s":"Sent",f1(l[1],k==="cps"?0:1)+" "+unit)+kpi(k==="cps"?"Established/s":"Received",f1(l[2],k==="cps"?0:1)+" "+unit)+(k==="cps"?kpi("Open",l[3]):kpi("Loss",f1(l[3],3)+" %"))}
+ $("#tp-kpis").innerHTML=K;
+ // tables
+ if(k==="rfc2544"){tpTable("#tp-tab1","Throughput and latency (RFC 2544)",[["Frame (B)",1],["Line rate (pps)",1],["Throughput",1],["% of link",1],["Mbit/s",1],["Loss %",1],["Latency min / avg / max (ms)",1],["Jitter (ms)",1],["Note",0]],
+   s.rows.map(x=>[x.size,fmt(x.line_pps),fmt(x.tp_pps)+" pps",f1(x.tp_pct,1),f1(x.tp_mbps,1),f1(x.loss_pct,3),f1(x.lat_min_ms)+" / "+f1(x.lat_avg_ms)+" / "+f1(x.lat_max_ms),f1(x.jitter_ms,3),x.limited?"limited by sender":(x.tp_pct===0?"no loss-free rate found":"")]));
+  tpTable("#tp-tab2","Frame loss rate (RFC 2544)",[["Frame (B)",1],["Offered (% of link)",1],["Offered (pps)",1],["Received (Mbit/s)",1],["Loss %",1]],s.rows2.map(x=>[x.size,x.pct,fmt(x.offered_pps),f1(x.rx_mbps,1),f1(x.loss_pct,3)+(x.limited?" (sender limited)":"")]))}
+ else if(k==="cps"){tpTable("#tp-tab1","Steps",[["Target",1],["Established",1],["Failed",1],["Avg conn/s",1],["Peak conn/s",1],["Connect p50 / p95 / max (ms)",1],["Rx accepted",1],["Result",0]],
+   s.rows.map(x=>[fmt(x.target_cps),fmt(x.established)+" / "+fmt(x.attempted),f1(x.fail_pct,2)+" %",f1(x.avg_cps,0),x.peak_cps,f1(x.lat_p50_ms)+" / "+f1(x.lat_p95_ms)+" / "+f1(x.lat_max_ms),fmt(x.rx_accepted),x.ok?"<span class=ok>OK</span>":x.limited?"<span class=warn>sender limited</span>":"<span class=bad>failing</span>"]));$("#tp-tab2").classList.add("hide")}
+ else{$("#tp-tab1").classList.add("hide");$("#tp-tab2").classList.add("hide")}}
+function tpChart(ser,unit){const cv=$("#tp-chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(!w)return;cv.width=w*dpr;cv.height=h*dpr;
+ const g=cv.getContext("2d");g.scale(dpr,dpr);g.clearRect(0,0,w,h);const cs=getComputedStyle(document.body);
+ const line=cs.getPropertyValue("--line"),mute=cs.getPropertyValue("--mute"),acc=cs.getPropertyValue("--acc");
+ g.strokeStyle=line;g.fillStyle=mute;g.font="11px sans-serif";for(let i=0;i<=4;i++){const y=10+(h-30)*i/4;g.beginPath();g.moveTo(52,y);g.lineTo(w,y);g.stroke()}
+ const A=ser.map(x=>x[1]),B=ser.map(x=>x[2]);if(A.length<2){g.fillText("Waiting for data…",60,h/2);return}
+ const mx=Math.max(...A,...B,1e-6)*1.15,x=i=>52+(w-58)*i/(A.length-1),y=v=>10+(h-30)*(1-v/mx);
+ const draw=(d,col,fill)=>{g.beginPath();d.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
+  if(fill){g.lineTo(x(d.length-1),h-20);g.lineTo(x(0),h-20);g.closePath();g.globalAlpha=.12;g.fillStyle=col;g.fill();g.globalAlpha=1}};
+ draw(A,acc,true);draw(B,"#0f1012",false);g.fillStyle=mute;g.fillText(mx.toFixed(mx<10?1:0)+" "+unit,2,16);g.fillText("0",40,h-17);g.fillText(ser.length+" s",52,h-4)}
 
 // ---- settings
 async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#iocconn").checked=c.ioc_connect;$("#iocfeed").checked=c.ioc_feeds;$("#blockips").value=(c.block_ips||[]).join(", ");$("#ver").textContent="Traffic-Gen "+(last.version||"");$("#ver2").textContent="v"+(last.version||"");$("#who").textContent="Traffic-Gen · admin"}
