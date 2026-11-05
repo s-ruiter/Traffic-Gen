@@ -212,7 +212,9 @@ def tp_validate_path(body, cfg):
         prefix = int(rx.get("prefix", 24))
         net = _net_of(ip, prefix)
         gw = str(rx.get("gateway", "")).strip()
-        if gw and ipaddress.IPv4Address(gw) not in net:
+        if not gw:
+            raise ValueError("The receiver gateway is required: the receiver must be able to answer the sender, which is in another network.")
+        if ipaddress.IPv4Address(gw) not in net:
             raise ValueError("Receiver gateway must be inside %s." % net)
     except ipaddress.AddressValueError as e:
         raise ValueError("Receiver address is invalid: %s" % e)
