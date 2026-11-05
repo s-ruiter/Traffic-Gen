@@ -129,6 +129,11 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
  <h2 style="margin-top:28px">Traffic mix</h2><p class="sub" style="margin-bottom:14px">Decide which kind of traffic occurs and how often. A weight of 0 disables a group.</p>
  <div id="mmsg" class="msg hide"></div>
  <div class="msg" id="mixwarn"><b>Security tests.</b> <i>Malware test</i> only uses standard, harmless test files (EICAR, WICAR); a download that the FortiGate lets through counts as <i>missed</i>. <i>IOC / botnet behaviour</i> only sends DNS queries (DGA patterns, DNS tunnelling, dynamic DNS, mining pools) and, on request, bare TCP connects, without data or downloads. Both are off by default; only enable them on networks where you are allowed to test this. The extra IOC switches are under Settings.</div>
+ <div class="row" style="margin-bottom:12px" id="mixpresets">
+  <button class="sec" data-preset="only" title="Set all non-security groups to 0 so only the security tests run (groups that are at 0 are set to 10)">Security test only</button>
+  <button class="sec" data-preset="none" title="Move the security sliders (Malware, IOC, Web filter) to 0 and leave everything else as it is">No security test</button>
+  <button class="sec" data-preset="default" title="Restore the default mix (security groups off)">Default mix</button>
+  <span class="mute">Presets only move the sliders; the mix is saved when you click Save or start the test.</span></div>
  <div class="card" id="mixbox"></div>
  <button id="msave">Save</button>
 
@@ -241,7 +246,7 @@ function plan(){const n=(cfg.networks||[]).reduce((a,x)=>a+(+x.count||0),0);cons
  $("#plan").textContent=n?`${n} source IPs × ${t} sessions = ${n*t} concurrent users · ${dur?mmss(dur*60):"until manually stopped"}`:"No source network configured yet — go to Network."}
 $("#go").onclick=async()=>{flash("#dmsg","");try{
   if(running){await api("stop",{})}else{
-   await api("config",{duration_minutes:dur,intensity:inten,threads_per_ip:+$("#threads").value||1});await api("start",{})}
+   await api("config",Object.assign({duration_minutes:dur,intensity:inten,threads_per_ip:+$("#threads").value||1},mixBody()));await api("start",{})}
   poll()}catch(e){flash("#dmsg",e.message,"err")}};
 async function loadCfg(){cfg=await api("config");dur=cfg.duration_minutes;inten=cfg.intensity;$("#threads").value=cfg.threads_per_ip;drawChips();plan()}
 
@@ -293,6 +298,15 @@ async function loadMix(){const [c,a]=await Promise.all([api("config"),api("apps"
  $("#mixbox").innerHTML=Object.keys(apps).sort().map(g=>{const w=c.groups[g]||0;return `<details class="grp"><summary><b>${esc(names[g]||g)}</b><input type="range" min="0" max="100" value="${w}" data-g="${esc(g)}"><span class="mute" data-v="${esc(g)}">${w}</span></summary>
   <div class="apps">${apps[g].map(x=>`<label><input type="checkbox" data-a="${esc(x.name)}" ${dis.has(x.name)?"":"checked"}>${esc(x.name)}</label>`).join("")}</div></details>`}).join("");
  $$("#mixbox input[type=range]").forEach(r=>r.oninput=()=>$(`[data-v="${r.dataset.g}"]`).textContent=r.value)}
+const SEC=["malware","ioc","webfilter"],DEFMIX={office365:25,collab:20,streaming:20,social:10,saas:10,web:10,updates:3,download:2,sdwan:5,webfilter:0,malware:0,ioc:0};
+function setW(g,v){const r=$(`#mixbox input[data-g="${g}"]`);if(r){r.value=v;const l=$(`[data-v="${g}"]`);if(l)l.textContent=v}}
+function mixPreset(k){const rs=$$("#mixbox input[type=range]");if(!rs.length)return;
+ if(k==="only"){const on=SEC.some(g=>+(($(`#mixbox input[data-g="${g}"]`)||{}).value||0)>0);rs.forEach(r=>{const g=r.dataset.g;if(!SEC.includes(g))setW(g,0);else if(!on)setW(g,10)});flash("#mmsg","Security test only: all other groups are set to 0.","good")}
+ else if(k==="none"){SEC.forEach(g=>setW(g,0));const empty=rs.every(r=>+r.value===0);if(empty)rs.forEach(r=>setW(r.dataset.g,DEFMIX[r.dataset.g]||0));flash("#mmsg",empty?"No security test: the security groups are set to 0 and the default traffic mix is restored.":"No security test: the security groups are set to 0.","good")}
+ else{rs.forEach(r=>setW(r.dataset.g,DEFMIX[r.dataset.g]||0));flash("#mmsg","Default mix restored.","good")}}
+$$("#mixpresets [data-preset]").forEach(b=>b.onclick=()=>mixPreset(b.dataset.preset));
+function mixBody(){const rs=$$("#mixbox input[type=range]");if(!rs.length)return {};const groups={};rs.forEach(r=>groups[r.dataset.g]=+r.value);
+ return {groups,disabled_apps:$$("#mixbox input[data-a]").filter(c=>!c.checked).map(c=>c.dataset.a)}}
 $("#msave").onclick=async()=>{const groups={};$$("#mixbox input[type=range]").forEach(r=>groups[r.dataset.g]=+r.value);
  const disabled=$$("#mixbox input[data-a]").filter(c=>!c.checked).map(c=>c.dataset.a);
  try{await api("config",{groups,disabled_apps:disabled});flash("#mmsg","Saved. Applies to the next test.","good")}catch(e){flash("#mmsg",e.message,"err")}};
