@@ -258,6 +258,7 @@ def tp_params(kind, body, cfg):
         if t["rx"]["parent"] == n["parent"]:
             raise ValueError("The receiver must use a different interface than the sender network (%s). Add a third interface to the LXC in Proxmox." % n["parent"])
         p["tx_ip"] = n["first"]
+        p["tx_gw"] = n.get("gateway", "")
         if p["tx_ip"] not in netconf.live_addrs().get(netconf.dev_of(n), set()):
             raise ValueError("Sender IP %s is not active. Click 'Apply' on the Network page first." % p["tx_ip"])
     if kind == "udp":

@@ -851,26 +851,50 @@ class Ctx:
         if self.loopback:
             return
         self.tcp_rx()
-        last = None
-        for attempt in range(4):
+        last, t0, tries = None, time.time(), 0
+        while time.time() - t0 < 30:
             self.check_stop()
+            tries += 1
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 c.bind((self.src, 0))
-                c.settimeout(3)
+                c.settimeout(2)
                 c.connect((self.dsts[0], self.base))
                 c.close()
-                self.progress["log"].append("Path check OK: %s reached %s:%d through the FortiGate." % (self.src, self.dsts[0], self.base))
+                self.progress["log"].append("Path check OK after %d attempt(s) / %.0f s: %s reached %s:%d through the FortiGate." % (tries, time.time() - t0, self.src, self.dsts[0], self.base))
+                if tries > 1:
+                    self.warn("The path to the receiver was only reachable after %.0f s. The FortiGate may still be clearing sessions or its ARP entry from the previous test." % (time.time() - t0))
                 return
             except OSError as e:
                 last = e
                 c.close()
-                time.sleep(1.0)
+                time.sleep(0.5)
         raise RuntimeError(
-            "The sender (%s) cannot reach the receiver (%s port %d) through the FortiGate: %s. Nothing was sent. Check: "
-            "(1) the FortiGate policy allows TCP and UDP %d-%d from %s to %s, (2) the receiver gateway %s is the FortiGate's IP on the receiver network, "
-            "(3) run 'Check environment' on the Throughput page, (4) the FortiGate is not in conserve mode or blocking this source after an earlier test."
-            % (self.src, self.dsts[0], self.base, last, self.base, self.base + MAX_STREAMS - 1, self.src, self.dsts[0], (self.p["rx"].get("gateway") or "-")))
+            "The sender (%s) cannot reach the receiver (%s port %d) through the FortiGate after %d attempts in %.0f s: %s. Nothing was sent.\n"
+            "Check: (1) the FortiGate policy allows TCP and UDP %d-%d from %s to %s, (2) the receiver gateway %s is the FortiGate's IP on the receiver network, "
+            "(3) the FortiGate is not in conserve mode or blocking this source after an earlier test (session table, DoS policy).\n"
+            "Diagnostics: %s"
+            % (self.src, self.dsts[0], self.base, tries, time.time() - t0, last, self.base, self.base + MAX_STREAMS - 1, self.src, self.dsts[0],
+               (self.p["rx"].get("gateway") or "-"), self.diagnostics()))
+
+    def diagnostics(self):
+        out = []
+        try:
+            r = run(["ip", "route", "get", self.dsts[0], "from", self.src], check=False)
+            out.append("sender route: " + (r.stdout.strip().splitlines() or [r.stderr.strip()])[0][:140])
+            gw = self.p.get("tx_gw")
+            if gw:
+                ok = run(["ping", "-c", "1", "-W", "1", "-I", self.src, gw], check=False).returncode == 0
+                out.append("sender->its gateway %s: ping %s" % (gw, "ok" if ok else "no reply"))
+            if self.net and self.net.pid:
+                ping, arp = self.net.gateway_probe()
+                out.append("receiver->gateway %s: ping %s, ARP %s" % (self.p["rx"].get("gateway"), "ok" if ping else "no reply", "ok" if arp else "no reply"))
+                nb = run(["nsenter", "-t", str(self.net.pid), "-n", "ip", "-br", "neigh"], check=False).stdout.strip().replace("\n", "; ")
+                lk = run(["nsenter", "-t", str(self.net.pid), "-n", "ip", "-br", "link", "show", RX_DEV], check=False).stdout.strip()
+                out.append("receiver link: %s; neighbours: %s" % (lk[:90], nb[:200] or "none"))
+        except Exception as e:  # noqa
+            out.append("(diagnostics failed: %s)" % e)
+        return " | ".join(out)
 
 
 def _drain(a):
