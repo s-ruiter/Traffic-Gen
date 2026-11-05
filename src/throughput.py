@@ -104,6 +104,37 @@ def run(cmd, check=True):
     return r
 
 
+def _netns_id(pid):
+    try:
+        return os.readlink("/proc/%d/ns/net" % pid)
+    except OSError:
+        return None
+
+
+def kill_stale_holders():
+    """Kill namespace holders (and anything inside their namespace) left behind by an earlier run."""
+    mine = _netns_id(os.getpid())
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) == os.getpid():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % d, "rb") as f:
+                cmd = f.read()
+        except OSError:
+            continue
+        if (cmd.startswith(b"sleep\x0086400") or cmd.startswith(b"unshare\x00-n\x00sleep\x0086400")) and _netns_id(int(d)) not in (None, mine):
+            try:
+                os.kill(int(d), 9)
+            except OSError:
+                pass
+
+
+def mac_for(ip):
+    """A stable, locally administered MAC per receiver IP, so the FortiGate's ARP entry stays valid between tests."""
+    b = ipaddress.IPv4Address(ip).packed
+    return "02:54:47:%02x:%02x:%02x" % (b[1], b[2], b[3])
+
+
 class RxNet:
     """Isolated receiver network: a holder process in its own netns plus a VLAN/macvlan interface."""
 
@@ -112,6 +143,8 @@ class RxNet:
 
     def up(self):
         rx = self.rx
+        kill_stale_holders()
+        run(["ip", "link", "del", RX_DEV], check=False)
         self.holder = subprocess.Popen(["unshare", "-n", "sleep", "86400"], stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, preexec_fn=_die_with_parent)
         self.pid = self.holder.pid
@@ -128,10 +161,11 @@ class RxNet:
         try:
             run(["ip", "link", "del", RX_DEV], check=False)
             run(["ip", "link", "set", rx["parent"], "up"])          # the parent NIC has no IP, so it may still be down
+            mac = mac_for(rx["ip"])
             if rx.get("vlan"):
-                run(["ip", "link", "add", "link", rx["parent"], "name", RX_DEV, "type", "vlan", "id", str(int(rx["vlan"]))])
+                run(["ip", "link", "add", "link", rx["parent"], "name", RX_DEV, "address", mac, "type", "vlan", "id", str(int(rx["vlan"]))])
             else:
-                run(["ip", "link", "add", "link", rx["parent"], "name", RX_DEV, "type", "macvlan", "mode", "bridge"])
+                run(["ip", "link", "add", "link", rx["parent"], "name", RX_DEV, "address", mac, "type", "macvlan", "mode", "bridge"])
             run(["ip", "link", "set", RX_DEV, "netns", str(self.pid)])
             ns = ["nsenter", "-t", str(self.pid), "-n"]
             run(ns + ["ip", "link", "set", "lo", "up"])
@@ -143,7 +177,9 @@ class RxNet:
             if rx.get("gateway"):
                 run(ns + ["ip", "route", "add", "default", "via", rx["gateway"]])
             for ip in ips:
-                run(ns + ["arping", "-U", "-c", "1", "-I", RX_DEV, ip], check=False)
+                run(ns + ["arping", "-U", "-c", "2", "-I", RX_DEV, ip], check=False)
+            if rx.get("gateway"):                                  # makes the gateway (re)learn our MAC address
+                run(ns + ["ping", "-c", "1", "-W", "1", "-I", rx["ip"], rx["gateway"]], check=False)
         except Exception:
             self.down()
             raise
@@ -167,9 +203,18 @@ class RxNet:
 
     def down(self):
         if self.holder:
+            ns_id = _netns_id(self.pid)
+            run(["nsenter", "-t", str(self.pid), "-n", "ip", "link", "del", RX_DEV], check=False)   # frees MAC and IPs at once
+            if ns_id:                                                # kill whatever is still inside the namespace
+                for d in os.listdir("/proc"):
+                    if d.isdigit() and int(d) not in (os.getpid(), self.pid) and _netns_id(int(d)) == ns_id:
+                        try:
+                            os.kill(int(d), 9)
+                        except OSError:
+                            pass
             try:
                 self.holder.kill()
-                self.holder.wait(timeout=3)
+                self.holder.wait(timeout=5)
             except Exception:  # noqa
                 pass
             self.holder = None
@@ -785,9 +830,13 @@ class Ctx:
         for pr, conn in self.udp + ([self.tcp] if self.tcp else []):
             try:
                 conn.send(("quit",))
-                pr.join(1)
+                pr.join(2)
                 if pr.is_alive():
                     pr.terminate()
+                    pr.join(2)
+                if pr.is_alive():
+                    os.kill(pr.pid, 9)
+                    pr.join(2)
             except Exception:  # noqa
                 pass
         if self.net:
@@ -796,6 +845,32 @@ class Ctx:
     def check_stop(self):
         if self.stop.is_set():
             raise Stopped()
+
+    def path_check(self):
+        """Before a TCP based test: make sure the sender can really reach the receiver through the firewall."""
+        if self.loopback:
+            return
+        self.tcp_rx()
+        last = None
+        for attempt in range(4):
+            self.check_stop()
+            try:
+                c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                c.bind((self.src, 0))
+                c.settimeout(3)
+                c.connect((self.dsts[0], self.base))
+                c.close()
+                self.progress["log"].append("Path check OK: %s reached %s:%d through the FortiGate." % (self.src, self.dsts[0], self.base))
+                return
+            except OSError as e:
+                last = e
+                c.close()
+                time.sleep(1.0)
+        raise RuntimeError(
+            "The sender (%s) cannot reach the receiver (%s port %d) through the FortiGate: %s. Nothing was sent. Check: "
+            "(1) the FortiGate policy allows TCP and UDP %d-%d from %s to %s, (2) the receiver gateway %s is the FortiGate's IP on the receiver network, "
+            "(3) run 'Check environment' on the Throughput page, (4) the FortiGate is not in conserve mode or blocking this source after an earlier test."
+            % (self.src, self.dsts[0], self.base, last, self.base, self.base + MAX_STREAMS - 1, self.src, self.dsts[0], (self.p["rx"].get("gateway") or "-")))
 
 
 def _drain(a):
@@ -1414,6 +1489,9 @@ class Runner:
         try:
             st["phase"] = "preparing receiver"
             ctx.up()
+            if kind in ("tcp", "cps", "concurrent"):
+                st["phase"] = "checking the path"
+                ctx.path_check()
             dur = float(p.get("duration", 10))
             if kind == "udp":
                 st["phase"], st["steps"] = "UDP stream", 1

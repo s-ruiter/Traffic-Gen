@@ -57,6 +57,8 @@ Only the sender network is set up on the Network page. The receiver is configure
 
 The *Self-test* mode runs sender and receiver both inside the LXC on 127.0.0.1. The traffic never leaves the LXC and does not touch the FortiGate; use it to see what the LXC itself can generate and to check that the tool works.
 
+Receiver reliability: the receiver's virtual interface gets a fixed MAC address per receiver IP, so the FortiGate's ARP entry stays valid between tests, and every test is cleaned up completely (stale namespaces and processes are removed). Before a TCP based test (TCP, connections per second, concurrent sessions) the tool checks that the sender can really reach the receiver through the FortiGate and stops with a clear message if not, instead of running a test that sends nothing.
+
 Load protection: the test processes run at low priority so the GUI stays responsive, the number of streams and workers is limited to what the LXC's CPU cores allow, and a CPU monitor shows the LXC load during a test. The GUI warns before a test starts when the chosen rate, frame sizes, connection count or run time will not fit this LXC (for example too few cores, very small frames, or many simultaneous connections that could fill the FortiGate session table), and during a test when the CPU stays saturated, because the result is then limited by the LXC instead of the network. For 1 Gbit/s give the LXC 4 CPU cores.
 
 Reports: after a test you can download the results as a **PDF report** (test setup, parameters, results, warnings, chart and tables) from the Throughput page and from the Traffic mix page; the Throughput page also offers the raw results as JSON. The PDF is generated on the LXC, no extra packages needed.
