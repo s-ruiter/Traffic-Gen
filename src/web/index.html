@@ -63,7 +63,13 @@ canvas{width:100%;height:190px;display:block}
 .dg .ar{stroke:#da291c;stroke-width:2;fill:none;marker-end:url(#ah)}.dg .ar2{stroke:#0f1012;stroke-width:2;fill:none;marker-end:url(#ah2)}
 .flows{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:6px}.flows .card{display:flex;flex-direction:column;margin:0}.flows p{margin:0 0 14px;color:var(--mute)}.flows .go{margin-top:auto;align-self:flex-start}
 .steps{margin:0;padding-left:20px}.steps li{margin:6px 0}
-input:disabled,select:disabled{opacity:.5;cursor:not-allowed;background:#f4f4f5}.msg.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+input:disabled,select:disabled{opacity:.5;cursor:not-allowed;background:#f4f4f5}.g5{display:grid;gap:14px 16px;grid-template-columns:repeat(5,minmax(0,1fr));align-items:end}
+.g5 .s2{grid-column:span 2}
+.net .grid{align-items:end}
+@media(max-width:1000px){.g5{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.g5{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.g5{grid-template-columns:1fr}}
+.msg.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
 .grp{border-bottom:1px solid var(--line);padding:10px 0}.grp:last-child{border:0}
 .grp summary{cursor:pointer;display:grid;grid-template-columns:130px 1fr 44px;gap:14px;align-items:center;list-style:none}
 .grp summary::-webkit-details-marker{display:none}
@@ -87,7 +93,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
 <div class="app hide" id="app">
 <nav>
  <div class="brand"><i><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></i>Traffic-Gen</div>
- <a data-p="dash" class="on">Dashboard</a><a data-p="mix">Traffic mix</a><a data-p="net">Network</a><a data-p="tp">Throughput</a><a data-p="set">Settings</a>
+ <a data-p="dash" class="on">Dashboard</a><a data-p="mix">Traffic mix</a><a data-p="tp">Throughput</a><a data-p="set">Settings</a>
  <span class="pill st" id="pill">Idle</span>
 </nav>
 <main>
@@ -99,7 +105,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
   <div class="card"><svg class="dg" viewBox="0 0 330 120" role="img" aria-label="Sender on eth1 sends through the FortiGate to the receiver on eth2"><defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#da291c"/></marker><marker id="ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="#0f1012"/></marker></defs><rect class="lx" x="6" y="28" width="86" height="64" rx="8"/><text x="49" y="54">Sender</text><text class="sm" x="49" y="70">eth1</text><path class="ar2" d="M96 60H124"/><rect class="fw" x="128" y="28" width="64" height="64" rx="8"/><text class="wt" x="160" y="64">FortiGate</text><path class="ar2" d="M196 60H224"/><rect class="lx" x="228" y="28" width="86" height="64" rx="8" style="stroke:#0f1012"/><text x="271" y="54">Receiver</text><text class="sm" x="271" y="70">eth2</text><text class="sm" x="165" y="108">loss · jitter · latency · conn/s</text></svg><h3 style="margin:0 0 6px;font-size:16px">Throughput</h3><p>A sender and a receiver on two networks, with the FortiGate in between: bandwidth, packet loss, jitter, latency (UDP, TCP, RFC 2544) and connections per second.</p><button class="sec go" data-go="tp">Open Throughput</button></div>
  </div>
  <div class="card" style="margin-top:16px"><h2>Getting started</h2>
-  <ol class="steps"><li><b>Network:</b> add a source network on eth1 (first IP, number of IPs, FortiGate gateway) and click Apply.</li>
+  <ol class="steps"><li><b>Settings > Network:</b> add a source network on eth1 (first IP, number of IPs, FortiGate gateway) and click Apply.</li>
   <li><b>Traffic mix:</b> choose which traffic to generate, then start the test and follow the results live.</li>
   <li><b>Throughput</b> (optional): add a third interface (eth2) for the receiver, then measure bandwidth, packet loss and connections per second.</li></ol></div>
 </section>
@@ -139,37 +145,27 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
 
 </section>
 
-<section id="p-net" class="hide">
- <h1>Network</h1><p class="sub">Test traffic leaves the LXC through a separate source network; the management interface is left alone.</p>
- <div class="msg" id="mgmtinfo"></div>
- <div id="nmsg" class="msg hide"></div>
- <div id="nets"></div>
- <div class="row" style="margin-top:6px"><button class="sec" id="addnet">+ Add network</button><div style="flex:1"></div>
-  <button class="sec" id="ntest">Test connection</button><button id="napply">Apply</button></div>
- <div class="mute" id="nsum" style="margin-top:10px"></div>
-</section>
-
 <section id="p-tp" class="hide">
  <h1>Throughput</h1><p class="sub">Measure bandwidth, packet loss and connections per second through the FortiGate: a sender on a source network talks to a receiver on a second network.</p>
  <div id="tmsg" class="msg hide"></div>
  <div class="card"><h2>Path</h2>
-  <p class="mute" style="margin:0 0 14px">Traffic flows from the <b>sender</b> (a source network on eth1) through the <b>FortiGate</b> to the <b>receiver</b> (the third interface, eth2). The receiver is set up here, <b>not</b> on the Network page; only the sender network is configured there.</p>
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+  <p class="mute" style="margin:0 0 14px">Traffic flows from the <b>sender</b> (a source network on eth1) through the <b>FortiGate</b> to the <b>receiver</b> (the third interface, eth2). The receiver is set up here, <b>not</b> under Settings > Network; only the sender network is configured there.</p>
+  <div class="g5">
    <div><label class="f">Mode<span class="tip" tabindex="0" data-tip="Isolated: sender and receiver talk to each other through the FortiGate (the real test). Self-test: both run inside this LXC on 127.0.0.1 and never reach the FortiGate.">?</span></label><select id="tp-mode"><option value="isolated">Isolated (via FortiGate)</option><option value="loopback">Self-test (this LXC only, no FortiGate)</option></select></div>
    <div><label class="f">Base port<span class="tip" tabindex="0" data-tip="First UDP/TCP port the receiver listens on. It uses this port and the next 7 (default 5201-5208). Allow these ports in the FortiGate policy.">?</span></label><input id="tp-port" type="number" min="1024" max="65000"></div>
   </div>
-  <div class="tp-iso" style="margin-top:18px"><b>Sender</b> <span class="mute">— uses the first IP of a source network</span>
-   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px"><div><label class="f">Sender network (from the Network page)<span class="tip" tabindex="0" data-tip="The source network (set up on the Network page) that the sender uses. Its first IP is the sender address and its gateway carries the traffic to the FortiGate.">?</span></label><select id="tp-tx"></select></div></div>
+  <div class="tp-iso" style="margin-top:20px"><b>Sender</b> <span class="mute">— uses the first IP of a source network</span>
+   <div class="g5" style="margin-top:8px"><div class="s2"><label class="f">Sender network (from Settings > Network)<span class="tip" tabindex="0" data-tip="The source network (set up under Settings > Network) that the sender uses. Its first IP is the sender address and its gateway carries the traffic to the FortiGate.">?</span></label><select id="tp-tx"></select></div></div>
    <div class="mute" id="tp-sender" style="margin-top:6px"></div></div>
-  <div class="tp-iso" style="margin-top:18px"><b>Receiver</b> <span class="mute">— a virtual interface on the third NIC, only while a test runs</span>
-   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px">
+  <div class="tp-iso" style="margin-top:20px"><b>Receiver</b> <span class="mute">— a virtual interface on the third NIC, only while a test runs</span>
+   <div class="g5" style="margin-top:8px">
     <div><label class="f">Receiver interface (third NIC)<span class="tip" tabindex="0" data-tip="The third NIC (for example eth2), connected to the FortiGate port or VLAN of the receiver network. The NIC itself needs no IP address.">?</span></label><select id="tp-parent"></select></div>
     <div><label class="f">Receiver IP (a free address)<span class="tip" tabindex="0" data-tip="A free IP address in the receiver network. It is assigned to a virtual interface on the NIC only while a test runs. No other device may use it.">?</span></label><input id="tp-ip" placeholder="10.10.40.10"></div>
-    <div><label class="f">Prefix<span class="tip" tabindex="0" data-tip="Prefix length of the receiver network, for example 24 for 255.255.255.0.">?</span></label><input id="tp-prefix" type="number" min="8" max="30"></div>
     <div><label class="f">Number of receiver IPs<span class="tip" tabindex="0" data-tip="How many consecutive addresses (starting at the receiver IP) the receiver answers on. 1 is enough for all tests except Concurrent sessions above 50,000: more destination IPs raise the number of sessions that fit.">?</span></label><input id="tp-count" type="number" min="1" max="250"></div>
+    <div><label class="f">Prefix<span class="tip" tabindex="0" data-tip="Prefix length of the receiver network, for example 24 for 255.255.255.0.">?</span></label><input id="tp-prefix" type="number" min="8" max="30"></div>
     <div><label class="f">Receiver gateway (FortiGate IP)<span class="tip" tabindex="0" data-tip="The FortiGate's own IP address in the receiver network. The receiver uses it to send replies back to the sender, which is in another network.">?</span></label><input id="tp-gw" placeholder="10.10.40.1"></div>
    </div>
-   <div class="mute" style="margin-top:6px">The receiver gateway is the FortiGate's own address in the receiver network (the FortiGate interface or VLAN interface connected to eth2). The sender's gateway comes from the Network page.</div></div>
+   <div class="mute" style="margin-top:6px">The receiver gateway is the FortiGate's own address in the receiver network (the FortiGate interface or VLAN interface connected to eth2). The sender's gateway comes from Settings > Network.</div></div>
   <div class="msg err hide" id="tp-warn" style="margin-top:12px"></div>
   <div class="msg hide" id="tp-selftest" style="margin-top:12px"><b>What the self-test does.</b> Sender and receiver both run inside this LXC and talk to each other over 127.0.0.1 (the loopback interface). The packets never leave the LXC: they do not reach a network interface, the Proxmox bridge or the FortiGate.
 <b>Use it to</b> check that the tool works and to see the highest rate this LXC can generate and receive (limited by its CPU cores and the Python engine). That tells you whether a limit in a real test comes from the tool or from the network.
@@ -178,7 +174,7 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
   <div class="row" style="margin-top:12px"><button class="sec" id="tp-save">Save</button><button class="sec" id="tp-check">Check environment</button></div></div>
  <div class="card"><h2>Test</h2>
   <div class="chips" id="tp-kinds" style="margin-bottom:14px"></div>
-  <div class="grid" id="tp-form" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));align-items:end"></div>
+  <div class="g5" id="tp-form"></div>
   <div class="mute" id="tp-desc" style="margin:12px 0 4px"></div>
   <div id="tp-total" style="margin:0 0 12px;font-weight:600"></div>
   <div class="row"><button class="big" id="tp-go">Start test</button><span class="pill" id="tp-pill">Idle</span><span class="mute" id="tp-phase"></span></div>
@@ -195,17 +191,25 @@ input[type=range]{padding:0;accent-color:var(--acc)}input[type=checkbox]{accent-
 </section>
 
 <section id="p-set" class="hide">
- <h1>Settings</h1><p class="sub">Security and behaviour.</p>
+ <h1>Settings</h1><p class="sub">Source networks, security and behaviour. Each section says which test it is for.</p>
  <div id="smsg" class="msg hide"></div>
- <div class="card"><h2>Verify TLS certificates</h2>
+ <div class="card"><h2>Source networks</h2>
+  <p class="mute" style="margin:0 0 14px"><b>Used by:</b> the <b>Traffic mix</b> test (it generates traffic from every source IP) and the <b>Throughput</b> tests (the sender uses the first IP or IPs of the network you pick there). Test traffic leaves the LXC through a separate source network on eth1, through your FortiGate; the management interface is left alone.</p>
+  <div class="msg" id="mgmtinfo"></div>
+  <div id="nmsg" class="msg hide"></div>
+  <div id="nets"></div>
+  <div class="row" style="margin-top:6px"><button class="sec" id="addnet">+ Add network</button><div style="flex:1"></div>
+   <button class="sec" id="ntest">Test connection</button><button id="napply">Apply</button></div>
+  <div class="mute" id="nsum" style="margin-top:10px"></div></div>
+ <div class="card"><h2>Verify TLS certificates</h2><p class="mute" style="margin:0 0 10px"><b>Used by:</b> the Traffic mix test (HTTPS requests to the target sites).</p>
   <label class="apps"><span><input type="checkbox" id="tlsv"> Verify server certificates (leave off with SSL deep inspection using your own CA)</span></label><button class="sec" id="tlssave">Save</button></div>
- <div class="card"><h2>IOC tests</h2>
+ <div class="card"><h2>IOC tests</h2><p class="mute" style="margin:0 0 10px"><b>Used by:</b> the IOC / botnet group and the security tests of the Traffic mix test.</p>
   <div class="apps" style="flex-direction:column;gap:10px">
    <label><input type="checkbox" id="iocconn"> Allow bare TCP connects to IOC targets (Tor directory authorities, mining pool ports). Nothing is sent; the connection is closed immediately.</label>
    <label><input type="checkbox" id="iocfeed"> Fetch botnet C2 IPs (abuse.ch Feodo Tracker, once a day) and make bare TCP connects to them. Also requires the switch above.</label>
    <div><label class="f">FortiGuard block portal IPs (DNS answer = blocked, comma separated)</label><input id="blockips" style="max-width:340px"></div></div>
   <button class="sec" id="iocsave" style="margin-top:12px">Save</button></div>
- <div class="card"><h2>Change password</h2><div class="grid" style="max-width:340px">
+ <div class="card"><h2>Change password</h2><p class="mute" style="margin:0 0 10px">For signing in to this web interface.</p><div class="grid" style="max-width:340px">
   <div><label class="f">Current</label><input type="password" id="pw0"></div><div><label class="f">New (min. 8 characters)</label><input type="password" id="pw1"></div>
   <button id="pwsave">Change</button></div></div>
  <button class="sec" id="logout">Sign out</button> <span class="mute" id="ver" style="margin-left:12px"></span>
@@ -233,7 +237,7 @@ async function doLogin(){try{await api("login",{password:$("#lpw").value});$("#l
 $("#lbtn").onclick=doLogin;$("#lpw").onkeydown=e=>{if(e.key==="Enter")doLogin()};
 let page="dash";
 $$("nav a").forEach(a=>a.onclick=()=>{page=a.dataset.p;$$("nav a").forEach(x=>x.classList.toggle("on",x===a));
-  $$("main section").forEach(s=>s.classList.toggle("hide",s.id!=="p-"+page));if(page==="mix")loadMix();if(page==="net")loadNet();if(page==="set")loadSet();if(page==="tp")loadTp()});
+  $$("main section").forEach(s=>s.classList.toggle("hide",s.id!=="p-"+page));if(page==="mix")loadMix();if(page==="set"){loadSet();loadNet()}if(page==="tp")loadTp()});
 
 // ---- dashboard
 const DURS=[5,10,15,30,60,120,0,"x"];let dur=10,inten="medium",cfg={},last={},running=false;
@@ -245,7 +249,7 @@ function drawChips(){
 $("#durCustom").oninput=e=>{dur=Math.max(1,+e.target.value||1);drawChips();plan()};
 $("#threads").oninput=plan;
 function plan(){const n=(cfg.networks||[]).reduce((a,x)=>a+(+x.count||0),0);const t=+$("#threads").value||1;
- $("#plan").textContent=n?`${n} source IPs × ${t} sessions = ${n*t} concurrent users · ${dur?mmss(dur*60):"until manually stopped"}`:"No source network configured yet — go to Network."}
+ $("#plan").textContent=n?`${n} source IPs × ${t} sessions = ${n*t} concurrent users · ${dur?mmss(dur*60):"until manually stopped"}`:"No source network configured yet — go to Settings > Network."}
 $("#go").onclick=async()=>{flash("#dmsg","");try{
   if(running){await api("stop",{})}else{
    await api("config",Object.assign({duration_minutes:dur,intensity:inten,threads_per_ip:+$("#threads").value||1},mixBody()));await api("start",{})}
@@ -422,13 +426,13 @@ let tpBlocked=false;
 function tpParents(sel){tpSender();const txn=tpCfg.networks.find(n=>n.name===$("#tp-tx").value),cands=tpCfg.interfaces.filter(i=>!txn||i!==txn.parent);
  $("#tp-parent").innerHTML=cands.map(n=>`<option ${n===sel?"selected":""}>${esc(n)}</option>`).join("");
  const iso=$("#tp-mode").value==="isolated";let w="";
- if(iso&&!tpCfg.networks.length)w="No source network yet. Add and apply one on the Network page first; the sender uses it.";
- else if(iso&&!cands.length)w="No interface available for the receiver"+(txn?" besides "+txn.parent+", which the sender uses":"")+". The throughput test needs a third interface: eth0 = management, eth1 = sender, eth2 = receiver, with the receiver on a different network than the sender so the traffic crosses the FortiGate. Add one in Proxmox (do not add it on this app\'s Network page; LXC > Network > Add: bridge and VLAN tag of the receiver network, firewall off) and restart the LXC, or on the Proxmox host: pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0";
+ if(iso&&!tpCfg.networks.length)w="No source network yet. Add and apply one under Settings > Network first; the sender uses it.";
+ else if(iso&&!cands.length)w="No interface available for the receiver"+(txn?" besides "+txn.parent+", which the sender uses":"")+". The throughput test needs a third interface: eth0 = management, eth1 = sender, eth2 = receiver, with the receiver on a different network than the sender so the traffic crosses the FortiGate. Add one in Proxmox (do not add it under this app\'s Settings > Network; in Proxmox: LXC > Network > Add: bridge and VLAN tag of the receiver network, firewall off) and restart the LXC, or on the Proxmox host: pct set <CTID> -net2 name=eth2,bridge=<bridge>,tag=<vlan>,firewall=0";
  $("#tp-warn").textContent=w;$("#tp-warn").classList.toggle("hide",!w);tpBlocked=!!w}
 $("#tp-tx").onchange=()=>tpParents($("#tp-parent").value);
-function tpSender(){const n=tpCfg.networks.find(x=>x.name===$("#tp-tx").value);$("#tp-sender").textContent=n?`Sender IP ${n.first} on ${n.parent}, gateway ${n.gateway} (configured on the Network page).`:""}
-function tpMode(){tpParents($("#tp-parent").value);const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));$("#tp-tx").parentElement.classList.toggle("hide",!iso);
- $("#tp-selftest").classList.toggle("hide",iso);$("#tp-hint").classList.toggle("hide",!iso);$("#tp-hint").textContent=iso?"The receiver needs one IP (more only for the Concurrent sessions test above 50,000 sessions), assigned to a virtual interface on the receiver NIC only while a test runs, so the NIC itself needs no IP and nothing to configure on the Network page. The receiver must be in a different network than the sender, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender IP to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
+function tpSender(){const n=tpCfg.networks.find(x=>x.name===$("#tp-tx").value);$("#tp-sender").textContent=n?`Sender IP ${n.first} on ${n.parent}, gateway ${n.gateway} (configured under Settings > Network).`:""}
+function tpMode(){tpParents($("#tp-parent").value);const iso=$("#tp-mode").value==="isolated";$$(".tp-iso").forEach(e=>e.classList.toggle("hide",!iso));
+ $("#tp-selftest").classList.toggle("hide",iso);$("#tp-hint").classList.toggle("hide",!iso);$("#tp-hint").textContent=iso?"The receiver needs one IP (more only for the Concurrent sessions test above 50,000 sessions), assigned to a virtual interface on the receiver NIC only while a test runs, so the NIC itself needs no IP and nothing to configure under Settings > Network. The receiver must be in a different network than the sender, so traffic crosses the FortiGate. Allow UDP and TCP "+($("#tp-port").value||5201)+"–"+(+($("#tp-port").value||5201)+7)+" from the sender IP to the receiver IP in the FortiGate policy.":"Self-test: sender and receiver both run inside this LXC on 127.0.0.1. Traffic never leaves the LXC and does not touch the FortiGate. Use it to see what this LXC can generate (CPU limit) and to check that the tool works."}
 $("#tp-mode").onchange=tpMode;$("#tp-port").oninput=tpMode;
 const tpPath=()=>({tx_network:$("#tp-tx").value,base_port:+$("#tp-port").value||5201,rx:{mode:$("#tp-mode").value,parent:$("#tp-parent").value,ip:$("#tp-ip").value.trim(),prefix:+$("#tp-prefix").value||24,gateway:$("#tp-gw").value.trim(),count:+$("#tp-count").value||1}});
 $("#tp-save").onclick=async()=>{try{await api("tp/config",tpPath());flash("#tmsg","Saved.","good")}catch(e){flash("#tmsg",e.message,"err")}};

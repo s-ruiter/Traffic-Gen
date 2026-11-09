@@ -147,11 +147,11 @@ class Controller:
             cfg["threads_per_ip"] = min(max(cfg["threads_per_ip"], 1), 20)
             sources = netconf.sources(cfg)
             if not sources:
-                raise ValueError("No source networks configured. Go to 'Network'.")
+                raise ValueError("No source networks configured. Go to Settings > Network.")
             live = netconf.live_addrs()
             missing = [s["ip"] for s in sources if s["ip"] not in live.get(s["dev"], set())]
             if missing:
-                raise ValueError("%d source IPs are not active. Click 'Apply' on the Network page first." % len(missing))
+                raise ValueError("%d source IPs are not active. Click 'Apply' under Settings > Network first." % len(missing))
             self.stop_evt = threading.Event()
             self.engine = tg.Engine(cfg, tg.load_profiles(), self.stop_evt, sources)
             dur = cfg["duration_minutes"]
@@ -260,7 +260,7 @@ def tp_params(kind, body, cfg):
         p["tx_ip"] = n["first"]
         p["tx_gw"] = n.get("gateway", "")
         if p["tx_ip"] not in netconf.live_addrs().get(netconf.dev_of(n), set()):
-            raise ValueError("Sender IP %s is not active. Click 'Apply' on the Network page first." % p["tx_ip"])
+            raise ValueError("Sender IP %s is not active. Click 'Apply' under Settings > Network first." % p["tx_ip"])
     if kind == "udp":
         p.update(payload=_num(body, "payload", 16, 1472, 1400, int), rate_mbps=_num(body, "rate_mbps", 1, 1000, 100),
                  streams=_num(body, "streams", 0, 8, 0, int), duration=_num(body, "duration", 1, 3600, 10))
@@ -291,7 +291,7 @@ def tp_params(kind, body, cfg):
             ips = netconf.ips_of(net)[:src_n]
             live = netconf.live_addrs().get(netconf.dev_of(net), set())
             if any(i not in live for i in ips):
-                raise ValueError("Not all %d sender IPs are active. Click 'Apply' on the Network page first." % src_n)
+                raise ValueError("Not all %d sender IPs are active. Click 'Apply' under Settings > Network first." % src_n)
             p["tx_ips"] = ips
         else:
             src_n, dst_n = 1, 1

@@ -69,7 +69,7 @@
   "steps": [
     "Run the installer on the Proxmox host and answer the wizard (container ID, management network, traffic bridge, GUI port, admin password).",
     "Open the web GUI on the printed URL (https://<management-ip>:8443) and sign in with the admin password.",
-    "Go to Network, add a source network (interface eth1, first IP, number of IPs, FortiGate gateway) and click Apply.",
+    "Go to Settings > Network, add a source network (interface eth1, first IP, number of IPs, FortiGate gateway) and click Apply.",
     "Go to Traffic mix and choose which groups and apps to run. The Web filter, Malware and IOC groups are off by default.",
     "On Traffic mix pick a duration and intensity, then click Start test.",
     "Compare the dashboard and /var/log/trafficgen/requests.log with the FortiGate logs for application control, web filter, antivirus and botnet events.",
@@ -85,19 +85,15 @@
       "caption": "Traffic mix: start the traffic test, follow results live (including the malware detection rate) and set the mix per group."
     },
     {
-      "file": "03-network.png",
-      "caption": "Network: multiple source networks, source IP ranges and FortiGate gateways."
+      "file": "03-settings.png",
+      "caption": "Settings: source networks (used by Traffic mix and Throughput), TLS verification, IOC options and password."
     },
     {
-      "file": "04-settings.png",
-      "caption": "Settings: TLS verification, IOC options and password."
-    },
-    {
-      "file": "05-throughput-rfc2544.png",
+      "file": "04-throughput-rfc2544.png",
       "caption": "Throughput: RFC 2544 throughput, latency and frame loss per frame size."
     },
     {
-      "file": "06-connections-per-second.png",
+      "file": "05-connections-per-second.png",
       "caption": "Throughput: connections per second with a stepped ramp and the highest sustained rate."
     }
   ]
