@@ -280,18 +280,58 @@ async function poll(){
  drawChart(ser);
  try{const l=await api("log?n=40");$("#log").innerHTML=l.map(r=>`<div><span class=mute>${esc(r.ts)}</span> ${esc(r.src)} <b>${esc(r.app)}</b> <span class="${r.result==="ok"?"ok":(r.result==="blocked"||r.result==="reached")?"warn":"bad"}">${esc(r.result)}${r.status?" "+r.status:""}</span> <span class=mute>${esc(r.url)}${r.ms?" · "+r.ms+" ms":""}</span></div>`).join("")}catch(e){}
 }
-function drawChart(ser){
- const cv=$("#chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(!w)return;cv.width=w*dpr;cv.height=h*dpr;
- const g=cv.getContext("2d");g.scale(dpr,dpr);g.clearRect(0,0,w,h);const cs=getComputedStyle(document.body);
- const line=cs.getPropertyValue("--line"),mute=cs.getPropertyValue("--mute"),acc=cs.getPropertyValue("--acc");
- const A=[],B=[];for(let i=1;i<ser.length;i++){const dt=ser[i][0]-ser[i-1][0]||2;A.push((ser[i][2]-ser[i-1][2])*8/dt/1e6);B.push((ser[i][1]-ser[i-1][1])/dt)}
- g.strokeStyle=line;g.fillStyle=mute;g.font="11px sans-serif";for(let i=0;i<=4;i++){const y=10+(h-30)*i/4;g.beginPath();g.moveTo(40,y);g.lineTo(w,y);g.stroke()}
- if(A.length<2){g.fillText("Waiting for data…",50,h/2);return}
- const draw=(d,col,fill)=>{const mx=Math.max(...d,1e-6)*1.15,x=i=>40+(w-46)*i/(d.length-1),y=v=>10+(h-30)*(1-v/mx);
-  g.beginPath();d.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
-  if(fill){g.lineTo(x(d.length-1),h-20);g.lineTo(x(0),h-20);g.closePath();g.globalAlpha=.12;g.fillStyle=col;g.fill();g.globalAlpha=1}return mx};
- const m1=draw(A,acc,true);draw(B,"#0f1012",false);g.fillStyle=mute;g.fillText(m1.toFixed(1)+" Mbit/s",2,16);g.fillText("0",28,h-17);
- g.fillText("−"+mmss(ser[ser.length-1][0]-ser[0][0]),40,h-4)}
+// ---- live charts: smooth scrolling head, monotone curves, eased axes
+const nice=v=>{if(!(v>0))return 1;const e=Math.pow(10,Math.floor(Math.log10(v))),f=v/e;return ([1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(x=>f<=x+1e-9)||10)*e};
+const axF=v=>v>=100?v.toFixed(0):v>=10?v.toFixed(0):v>=1?v.toFixed(1):v.toFixed(2);
+class LiveChart{
+ constructor(id){this.id=id;this.s=[];this.o={};this.arr=0;this.dtw=1;this.yA=0;this.yB=0;this.lastT=0;this.raf=0;this.col=null}
+ set(samples,o){const n=samples.length,prev=this.s;Object.assign(this.o,o||{});
+  const fresh=n!==prev.length||(n&&prev.length&&samples[n-1][0]!==prev[prev.length-1][0]);
+  this.s=samples;if(fresh){this.arr=performance.now();this.dtw=n>1?Math.max(.2,samples[n-1][0]-samples[n-2][0]):1}
+  if(!n){this.yA=this.yB=0}this.kick()}
+ kick(){if(!this.raf)this.raf=requestAnimationFrame(t=>{this.raf=0;if(this.draw(t))this.kick()})}
+ colors(){if(!this.col){const cs=getComputedStyle(document.body);this.col={line:cs.getPropertyValue("--line"),mute:cs.getPropertyValue("--mute"),acc:cs.getPropertyValue("--acc"),ink:cs.getPropertyValue("--ink")}}return this.col}
+ draw(t){const cv=document.getElementById(this.id);if(!cv)return false;const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return false;
+  const dpr=window.devicePixelRatio||1;if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+  const g=cv.getContext("2d"),C=this.colors(),o=this.o,dual=!!o.dual,L=dual?46:50,R=dual?46:10,T=22,B=22,W=w-L-R,H=h-T-B;
+  g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);g.font="11px Geist,sans-serif";
+  const dt=Math.min(.1,Math.max(.001,(t-(this.lastT||t))/1000));this.lastT=t;
+  const S=this.s,n=S.length;
+  const grid=()=>{g.strokeStyle=C.line;g.lineWidth=1;g.beginPath();for(let i=0;i<=4;i++){const y=Math.round(T+H*i/4)+.5;g.moveTo(L,y);g.lineTo(w-R,y)}g.stroke()};
+  grid();
+  if(n<2){g.fillStyle=C.mute;g.textAlign="left";g.fillText("Waiting for data…",L+10,h/2);return false}
+  // head: moves smoothly from the previous sample to the newest one while the next sample is on its way
+  const ph=Math.min(1,(t-this.arr)/(this.dtw*1000)),a=S[n-2],b=S[n-1],tH=a[0]+(b[0]-a[0])*ph,iv=(k)=>a[k]+(b[k]-a[k])*ph;
+  const pts=S.slice(0,n-1);pts.push([tH,iv(1),iv(2)]);
+  const t0=pts[0][0],tL=Math.max(t0,tH-(o.maxwin||300)),win=Math.max(15,tH-tL);
+  let j=0;while(j<pts.length-1&&pts[j+1][0]<=tL)j++;let vis=pts.slice(j);
+  if(vis[0][0]<tL&&vis.length>1){const p0=vis[0],p1=vis[1],f=(tL-p0[0])/(p1[0]-p0[0]);vis[0]=[tL,p0[1]+(p1[1]-p0[1])*f,p0[2]+(p1[2]-p0[2])*f]}
+  let mA=0,mB=0;vis.forEach(r=>{mA=Math.max(mA,r[1]);mB=Math.max(mB,r[2])});
+  let tA=nice(mA*1.1),tB=nice(mB*1.1);if(!dual)tA=tB=Math.max(tA,tB);
+  const k=1-Math.exp(-dt*6);this.yA=this.yA?this.yA+(tA-this.yA)*k:tA;this.yB=this.yB?this.yB+(tB-this.yB)*k:tB;
+  const conv=Math.abs(this.yA-tA)<.003*tA&&Math.abs(this.yB-tB)<.003*tB;if(conv){this.yA=tA;this.yB=tB}
+  const X=tt=>L+W*(tt-tL)/win,YA=v=>T+H*(1-v/this.yA),YB=v=>T+H*(1-v/this.yB);
+  // axes
+  g.fillStyle=dual?C.acc:C.mute;g.textAlign="right";for(let i=0;i<=4;i++)g.fillText(axF(this.yA*(1-i/4)),L-6,T+H*i/4+4);
+  if(dual){g.fillStyle=C.ink;g.textAlign="left";for(let i=0;i<=4;i++)g.fillText(axF(this.yB*(1-i/4)),w-R+6,T+H*i/4+4)}
+  g.fillStyle=C.mute;g.textAlign="left";g.fillText("−"+mmss(win),L,h-6);g.textAlign="right";g.fillText("now",w-R,h-6);
+  if(o.unitA){g.textAlign="left";g.fillStyle=dual?C.acc:C.mute;g.fillText(o.unitA,2,11)}
+  if(dual&&o.unitB){g.textAlign="right";g.fillStyle=C.ink;g.fillText(o.unitB,w-2,11)}
+  g.save();g.beginPath();g.rect(L,T-2,W+1,H+4);g.clip();
+  const path=(ys,fill,col,lw)=>{const P=vis.map(r=>[X(r[0]),ys(r[col])]);g.beginPath();curve(g,P);g.strokeStyle=fill?C.acc:C.ink;g.lineWidth=lw;g.lineJoin="round";g.stroke();
+   if(fill){g.lineTo(P[P.length-1][0],T+H);g.lineTo(P[0][0],T+H);g.closePath();g.globalAlpha=.12;g.fillStyle=C.acc;g.fill();g.globalAlpha=1}};
+  path(YA,true,1,2);path(YB,false,2,1.6);g.restore();
+  return ph<1||!conv}
+}
+// monotone cubic interpolation (no overshoot) through pixel points
+function curve(g,P){const n=P.length;g.moveTo(P[0][0],P[0][1]);if(n<3){for(let i=1;i<n;i++)g.lineTo(P[i][0],P[i][1]);return}
+ const d=[],m=[];for(let i=0;i<n-1;i++)d.push((P[i+1][1]-P[i][1])/((P[i+1][0]-P[i][0])||1e-9));
+ m.push(d[0]);for(let i=1;i<n-1;i++)m.push(d[i-1]*d[i]<=0?0:(d[i-1]+d[i])/2);m.push(d[n-2]);
+ for(let i=0;i<n-1;i++){if(d[i]===0){m[i]=m[i+1]=0;continue}const a=m[i]/d[i],b=m[i+1]/d[i],s=a*a+b*b;if(s>9){const tt=3/Math.sqrt(s);m[i]=tt*a*d[i];m[i+1]=tt*b*d[i]}}
+ for(let i=0;i<n-1;i++){const dx=(P[i+1][0]-P[i][0])/3;g.bezierCurveTo(P[i][0]+dx,P[i][1]+m[i]*dx,P[i+1][0]-dx,P[i+1][1]-m[i+1]*dx,P[i+1][0],P[i+1][1])}}
+const LC={};const lc=id=>LC[id]||(LC[id]=new LiveChart(id));
+function drawChart(ser){const S=[];for(let i=1;i<ser.length;i++){const dt=ser[i][0]-ser[i-1][0]||1;S.push([ser[i][0],(ser[i][2]-ser[i-1][2])*8/dt/1e6,(ser[i][1]-ser[i-1][1])/dt])}
+ lc("chart").set(S,{dual:true,unitA:"Mbit/s",unitB:"requests/s",maxwin:600})}
 
 // ---- mix
 let apps={};
@@ -438,15 +478,7 @@ async function tpPoll(){let s;try{s=await api("tp/state")}catch(e){return}
  else if(k==="cps"){tpTable("#tp-tab1","Steps",[["Target",1],["Established",1],["Failed",1],["Avg conn/s",1],["Peak conn/s",1],["Connect p50 / p95 / max (ms)",1],["Rx accepted",1],["Result",0]],
    s.rows.map(x=>[fmt(x.target_cps),fmt(x.established)+" / "+fmt(x.attempted),f1(x.fail_pct,2)+" %",f1(x.avg_cps,0),x.peak_cps,f1(x.lat_p50_ms)+" / "+f1(x.lat_p95_ms)+" / "+f1(x.lat_max_ms),fmt(x.rx_accepted),x.ok?"<span class=ok>OK</span>":x.limited?"<span class=warn>sender limited</span>":"<span class=bad>failing</span>"]));$("#tp-tab2").classList.add("hide")}
  else{$("#tp-tab1").classList.add("hide");$("#tp-tab2").classList.add("hide")}}
-function tpChart(ser,unit){const cv=$("#tp-chart"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(!w)return;cv.width=w*dpr;cv.height=h*dpr;
- const g=cv.getContext("2d");g.scale(dpr,dpr);g.clearRect(0,0,w,h);const cs=getComputedStyle(document.body);
- const line=cs.getPropertyValue("--line"),mute=cs.getPropertyValue("--mute"),acc=cs.getPropertyValue("--acc");
- g.strokeStyle=line;g.fillStyle=mute;g.font="11px sans-serif";for(let i=0;i<=4;i++){const y=10+(h-30)*i/4;g.beginPath();g.moveTo(52,y);g.lineTo(w,y);g.stroke()}
- const A=ser.map(x=>x[1]),B=ser.map(x=>x[2]);if(A.length<2){g.fillText("Waiting for data…",60,h/2);return}
- const mx=Math.max(...A,...B,1e-6)*1.15,x=i=>52+(w-58)*i/(A.length-1),y=v=>10+(h-30)*(1-v/mx);
- const draw=(d,col,fill)=>{g.beginPath();d.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
-  if(fill){g.lineTo(x(d.length-1),h-20);g.lineTo(x(0),h-20);g.closePath();g.globalAlpha=.12;g.fillStyle=col;g.fill();g.globalAlpha=1}};
- draw(A,acc,true);draw(B,"#0f1012",false);g.fillStyle=mute;g.fillText(mx.toFixed(mx<10?1:0)+" "+unit,2,16);g.fillText("0",40,h-17);g.fillText(ser.length+" s",52,h-4)}
+function tpChart(ser,unit){lc("tp-chart").set(ser.map(x=>[x[0],x[1],x[2]]),{dual:false,unitA:unit,maxwin:300})}
 
 // ---- settings
 async function loadSet(){const c=await api("config");$("#tlsv").checked=c.tls_verify;$("#iocconn").checked=c.ioc_connect;$("#iocfeed").checked=c.ioc_feeds;$("#blockips").value=(c.block_ips||[]).join(", ");$("#ver").textContent="Traffic-Gen "+(last.version||"");$("#ver2").textContent="v"+(last.version||"");$("#who").textContent="Traffic-Gen · admin"}
@@ -458,7 +490,7 @@ $("#logout").onclick=async()=>{await api("logout",{});showLogin()};
 // ---- boot
 let timer;
 async function boot(){const s=await fetch("/api/session").then(r=>r.json());if(!s.authed)return showLogin();
- $("#login").style.display="none";$("#app").classList.remove("hide");await loadCfg();poll();clearInterval(timer);timer=setInterval(()=>{if(page==="dash"||true)poll()},2000)}
+ $("#login").style.display="none";$("#app").classList.remove("hide");await loadCfg();poll();clearInterval(timer);timer=setInterval(()=>{if(page==="dash"||true)poll()},1000)}
 boot();
 </script>
 </body></html>

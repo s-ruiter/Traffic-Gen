@@ -104,7 +104,7 @@ class Controller:
         self.stop_evt = None
         self.thread = None
         self.deadline = None
-        self.series = collections.deque(maxlen=300)
+        self.series = collections.deque(maxlen=1800)
         self.apply_log = []
         threading.Thread(target=self._sampler, daemon=True).start()
 
@@ -114,7 +114,7 @@ class Controller:
 
     def _sampler(self):
         while True:
-            time.sleep(2)
+            time.sleep(1)
             e = self.engine
             if e and self.running:
                 t = e.totals()
